@@ -253,15 +253,23 @@ internal OperatorInfo get_operator_info(SymbolKind kind)
 }
 
 // @NOTE@ https://eli.thegreenplace.net/2012/08/02/parsing-expressions-by-precedence-climbing
-internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precedence = 0)
+internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precedence = 0, SymbolKind terminator_symbol_kind = SymbolKind::semicolon)
 {
 	ExpressionTree* current_tree;
 	{
 		Token token = peek_token(*tokenizer);
 
-		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::semicolon)
+		if (token.kind == TokenKind::symbol && token.symbol.kind == terminator_symbol_kind)
 		{
 			return 0;
+		}
+		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start)
+		{
+			eat_token(tokenizer);
+			current_tree = eat_expression(tokenizer, allocator, 0, SymbolKind::parenthesis_end);
+			ASSERT(current_tree);
+			token = eat_token(tokenizer);
+			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
 		}
 		else if (token.kind == TokenKind::number)
 		{
@@ -281,7 +289,7 @@ internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllo
 
 		if (token.kind == TokenKind::symbol)
 		{
-			if (token.symbol.kind == SymbolKind::semicolon)
+			if (token.symbol.kind == terminator_symbol_kind)
 			{
 				break;
 			}
@@ -292,7 +300,7 @@ internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllo
 				if (operator_info.precedence >= min_precedence)
 				{
 					eat_token(tokenizer);
-					current_tree = init_single_expression_tree(allocator, token, current_tree, eat_expression(tokenizer, allocator, operator_info.precedence + (operator_info.is_right_associative ? 0 : 1)));
+					current_tree = init_single_expression_tree(allocator, token, current_tree, eat_expression(tokenizer, allocator, operator_info.precedence + (operator_info.is_right_associative ? 0 : 1), terminator_symbol_kind));
 				}
 				else
 				{
