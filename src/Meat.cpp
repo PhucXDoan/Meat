@@ -12,6 +12,12 @@ struct String
 	char* data;
 };
 
+struct OperatorInfo
+{
+	i32    precedence;
+	bool32 is_right_associative;
+};
+
 enum struct SymbolKind : u8
 {
 	null,
@@ -220,82 +226,34 @@ internal Token eat_token(Tokenizer* tokenizer)
 	}
 }
 
-internal i32 get_operator_value(SymbolKind kind)
-{
-	switch (kind)
-	{
-		case SymbolKind::caret:
-		return 3;
-
-		case SymbolKind::asterisk:
-		case SymbolKind::forward_slash:
-		return 2;
-
-		case SymbolKind::plus:
-		case SymbolKind::minus:
-		return 1;
-
-		default:
-		return 0;
-	}
-}
-
-internal i32 get_operator_value(Token token)
-{
-	if (token.kind == TokenKind::symbol)
-	{
-		return get_operator_value(token.symbol.kind);
-	}
-	else
-	{
-		return 0;
-	}
-}
-
-enum struct Associativity : u8
-{
-	null,
-	left,
-	right
-};
-
-internal Associativity get_operator_associativity(SymbolKind kind)
-{
-	switch (kind)
-	{
-		case SymbolKind::plus:
-		case SymbolKind::minus:
-		case SymbolKind::asterisk:
-		case SymbolKind::forward_slash:
-		return Associativity::left;
-
-		case SymbolKind::caret:
-		return Associativity::right;
-
-		default:
-		return Associativity::null;
-	}
-}
-
-internal Associativity get_operator_associativity(Token token)
-{
-	if (token.kind == TokenKind::symbol)
-	{
-		return get_operator_associativity(token.symbol.kind);
-	}
-	else
-	{
-		return Associativity::null;
-	}
-}
-
 internal Token peek_token(Tokenizer tokenizer)
 {
 	return eat_token(&tokenizer);
 }
 
+internal OperatorInfo get_operator_info(SymbolKind kind)
+{
+	switch (kind)
+	{
+		case SymbolKind::plus:
+		case SymbolKind::minus:
+		return { 0, false };
+
+		case SymbolKind::asterisk:
+		case SymbolKind::forward_slash:
+		return { 1, false };
+
+		case SymbolKind::caret:
+		return { 2, true };
+
+		default:
+		ASSERT(false); // Unknown operator.
+		return {};
+	}
+}
+
 // @NOTE@ https://eli.thegreenplace.net/2012/08/02/parsing-expressions-by-precedence-climbing
-internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precendence = 1)
+internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precedence = 0)
 {
 	ExpressionTree* current_tree;
 	{
@@ -321,34 +279,30 @@ internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllo
 	{
 		Token token = peek_token(*tokenizer);
 
-		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::semicolon)
+		if (token.kind == TokenKind::symbol)
 		{
-			break;
-		}
-		else
-		{
-			ASSERT(get_operator_value(token));
-
-			if (get_operator_value(token) >= min_precendence)
-			{
-				eat_token(tokenizer);
-
-				i32 next_min_precendence = get_operator_value(token);
-				if (get_operator_associativity(token) == Associativity::left)
-				{
-					next_min_precendence += 1;
-				}
-				else
-				{
-					ASSERT(get_operator_associativity(token) == Associativity::right);
-				}
-
-				current_tree = init_single_expression_tree(allocator, token, current_tree, eat_expression(tokenizer, allocator, next_min_precendence));
-			}
-			else
+			if (token.symbol.kind == SymbolKind::semicolon)
 			{
 				break;
 			}
+			else
+			{
+				OperatorInfo operator_info = get_operator_info(token.symbol.kind);
+
+				if (operator_info.precedence >= min_precedence)
+				{
+					eat_token(tokenizer);
+					current_tree = init_single_expression_tree(allocator, token, current_tree, eat_expression(tokenizer, allocator, operator_info.precedence + (operator_info.is_right_associative ? 0 : 1)));
+				}
+				else
+				{
+					break;
+				}
+			}
+		}
+		else
+		{
+			ASSERT(false); // Unknown token.
 		}
 	}
 
@@ -423,7 +377,12 @@ int main(void)
 	}
 	expression_tree_allocator.available_expression_tree[EXPRESSION_TREE_COUNT - 1].left = 0;
 
-	#if 0
+	ExpressionTree* expression_tree = eat_expression(&tokenizer, &expression_tree_allocator);
+
+	DEBUG_print_expression_tree(expression_tree, 0, 0);
+
+	DEFER { deinit_entire_expression_tree(&expression_tree_allocator, expression_tree); };
+
 	while (true)
 	{
 		Token token = eat_token(&tokenizer);
@@ -438,13 +397,6 @@ int main(void)
 			DEBUG_printf("Token : `%.*s`\n", PASS_STRING(token.string));
 		}
 	}
-	#else
-	ExpressionTree* expression_tree = eat_expression(&tokenizer, &expression_tree_allocator);
-
-	DEBUG_print_expression_tree(expression_tree, 0, 0);
-
-	DEFER { deinit_entire_expression_tree(&expression_tree_allocator, expression_tree); };
-	#endif
 
 	return 0;
 }
