@@ -12,12 +12,6 @@ struct String
 	char* data;
 };
 
-struct OperatorInfo
-{
-	i32    precedence;
-	bool32 is_right_associative;
-};
-
 enum struct SymbolKind : u8
 {
 	null,
@@ -226,94 +220,65 @@ internal Token eat_token(Tokenizer* tokenizer)
 	}
 }
 
-internal Token peek_token(Tokenizer tokenizer)
-{
-	return eat_token(&tokenizer);
-}
-
-internal OperatorInfo get_operator_info(SymbolKind kind)
+internal bool32 get_operator_info(i32* precedence, bool32* is_right_associative, SymbolKind kind)
 {
 	switch (kind)
 	{
-		case SymbolKind::plus:
-		case SymbolKind::minus:
-		return { 0, false };
+		case SymbolKind::caret:
+		*precedence           = 2;
+		*is_right_associative = true;
+		return true;
 
 		case SymbolKind::asterisk:
 		case SymbolKind::forward_slash:
-		return { 1, false };
+		*precedence           = 1;
+		*is_right_associative = false;
+		return true;
 
-		case SymbolKind::caret:
-		return { 2, true };
+		case SymbolKind::plus:
+		case SymbolKind::minus:
+		*precedence           = 0;
+		*is_right_associative = false;
+		return true;
 
-		default:
-		ASSERT(false); // Unknown operator.
-		return {};
 	}
+
+	return false;
 }
 
 // @NOTE@ https://eli.thegreenplace.net/2012/08/02/parsing-expressions-by-precedence-climbing
-internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precedence = 0, SymbolKind terminator_symbol_kind = SymbolKind::semicolon)
+internal ExpressionTree* eat_expression(Token* terminating_token, Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precedence = 0)
 {
 	ExpressionTree* current_tree;
 	{
-		Token token = peek_token(*tokenizer);
+		Token token = eat_token(tokenizer);
 
-		if (token.kind == TokenKind::symbol && token.symbol.kind == terminator_symbol_kind)
+		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start)
 		{
-			return 0;
-		}
-		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start)
-		{
-			eat_token(tokenizer);
-			current_tree = eat_expression(tokenizer, allocator, 0, SymbolKind::parenthesis_end);
+			current_tree = eat_expression(&token, tokenizer, allocator, 0);
 			ASSERT(current_tree);
-			token = eat_token(tokenizer);
 			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
 		}
 		else if (token.kind == TokenKind::number)
 		{
-			eat_token(tokenizer);
 			current_tree = init_single_expression_tree(allocator, token, 0, 0);
 		}
 		else
 		{
-			ASSERT(false); // Unknown token.
+			*terminating_token = token;
 			return 0;
 		}
 	}
 
-	while (true)
+	Token  token = eat_token(tokenizer);
+	i32    operator_precedence;
+	bool32 operator_is_right_associative;
+	while (token.kind == TokenKind::symbol && get_operator_info(&operator_precedence, &operator_is_right_associative, token.symbol.kind) && operator_precedence >= min_precedence)
 	{
-		Token token = peek_token(*tokenizer);
-
-		if (token.kind == TokenKind::symbol)
-		{
-			if (token.symbol.kind == terminator_symbol_kind)
-			{
-				break;
-			}
-			else
-			{
-				OperatorInfo operator_info = get_operator_info(token.symbol.kind);
-
-				if (operator_info.precedence >= min_precedence)
-				{
-					eat_token(tokenizer);
-					current_tree = init_single_expression_tree(allocator, token, current_tree, eat_expression(tokenizer, allocator, operator_info.precedence + (operator_info.is_right_associative ? 0 : 1), terminator_symbol_kind));
-				}
-				else
-				{
-					break;
-				}
-			}
-		}
-		else
-		{
-			ASSERT(false); // Unknown token.
-		}
+		current_tree = init_single_expression_tree(allocator, token, current_tree, eat_expression(terminating_token, tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
+		token = *terminating_token;
 	}
-
+	*terminating_token = token;
 	return current_tree;
 }
 
@@ -352,6 +317,32 @@ internal void DEBUG_print_expression_tree(ExpressionTree* tree, i32 depth, u32 p
 		}
 	}
 }
+
+internal bool32 DEBUG_token_eq(Token a, Token b)
+{
+	if (a.kind == TokenKind::symbol && b.kind == TokenKind::symbol && a.symbol.kind != b.symbol.kind)
+	{
+		return false;
+	}
+
+	return a.kind == b.kind && memcmp(a.string.data, b.string.data, a.string.size) == 0;
+}
+
+internal bool32 DEBUG_expression_tree_eq(ExpressionTree* a, ExpressionTree* b)
+{
+	if (a == b)
+	{
+		return true;
+	}
+	else if (a && b)
+	{
+		return DEBUG_token_eq(a->token, b->token) && DEBUG_expression_tree_eq(a->left, b->left) && DEBUG_expression_tree_eq(a->right, b->right);
+	}
+	else
+	{
+		return false;
+	}
+}
 #endif
 
 int main(void)
@@ -385,11 +376,11 @@ int main(void)
 	}
 	expression_tree_allocator.available_expression_tree[EXPRESSION_TREE_COUNT - 1].left = 0;
 
-	ExpressionTree* expression_tree = eat_expression(&tokenizer, &expression_tree_allocator);
+	Token           terminating_token;
+	ExpressionTree* expression_tree = eat_expression(&terminating_token, &tokenizer, &expression_tree_allocator);
+	DEFER { deinit_entire_expression_tree(&expression_tree_allocator, expression_tree); };
 
 	DEBUG_print_expression_tree(expression_tree, 0, 0);
-
-	DEFER { deinit_entire_expression_tree(&expression_tree_allocator, expression_tree); };
 
 	while (true)
 	{
