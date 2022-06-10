@@ -22,6 +22,7 @@ enum struct SymbolKind : u8
 	forward_slash,
 	period,
 	caret,
+	exclamation_point,
 	parenthesis_start,
 	parenthesis_end,
 };
@@ -190,6 +191,7 @@ internal Token eat_token(Tokenizer* tokenizer)
 					{ '/', SymbolKind::forward_slash     },
 					{ '.', SymbolKind::period            },
 					{ '^', SymbolKind::caret             },
+					{ '!', SymbolKind::exclamation_point },
 					{ '(', SymbolKind::parenthesis_start },
 					{ ')', SymbolKind::parenthesis_end   }
 				};
@@ -224,6 +226,11 @@ internal bool32 get_operator_info(i32* precedence, bool32* is_right_associative,
 {
 	switch (kind)
 	{
+		case SymbolKind::exclamation_point:
+		*precedence           = 3;
+		*is_right_associative = false;
+		return true;
+
 		case SymbolKind::caret:
 		*precedence           = 2;
 		*is_right_associative = true;
@@ -240,7 +247,6 @@ internal bool32 get_operator_info(i32* precedence, bool32* is_right_associative,
 		*precedence           = 0;
 		*is_right_associative = false;
 		return true;
-
 	}
 
 	return false;
@@ -284,9 +290,17 @@ internal ExpressionTree* eat_expression(Token* terminating_token, Tokenizer* tok
 	bool32 operator_is_right_associative;
 	while (current_token.kind == TokenKind::symbol && get_operator_info(&operator_precedence, &operator_is_right_associative, current_token.symbol.kind) && operator_precedence >= min_precedence)
 	{
-		current_tree  = init_single_expression_tree(allocator, current_token, current_tree, eat_expression(terminating_token, tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
-		current_token = *terminating_token;
-		ASSERT(current_tree->right);
+		if (current_token.symbol.kind == SymbolKind::exclamation_point)
+		{
+			current_tree  = init_single_expression_tree(allocator, current_token, current_tree, 0);
+			current_token = eat_token(tokenizer);
+		}
+		else
+		{
+			current_tree  = init_single_expression_tree(allocator, current_token, current_tree, eat_expression(terminating_token, tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
+			current_token = *terminating_token;
+			ASSERT(current_tree->right);
+		}
 	}
 	*terminating_token = current_token;
 	return current_tree;
@@ -389,6 +403,7 @@ int main(void)
 	Token           terminating_token;
 	ExpressionTree* expression_tree = eat_expression(&terminating_token, &tokenizer, &expression_tree_allocator);
 	DEFER { deinit_entire_expression_tree(&expression_tree_allocator, expression_tree); };
+	ASSERT(terminating_token.kind == TokenKind::symbol && terminating_token.symbol.kind == SymbolKind::semicolon);
 
 	DEBUG_print_expression_tree(expression_tree, 0, 0);
 
