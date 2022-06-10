@@ -21,6 +21,7 @@ enum struct SymbolKind : u8
 	asterisk,
 	forward_slash,
 	period,
+	caret,
 	parenthesis_start,
 	parenthesis_end,
 };
@@ -188,6 +189,7 @@ internal Token eat_token(Tokenizer* tokenizer)
 					{ '*', SymbolKind::asterisk          },
 					{ '/', SymbolKind::forward_slash     },
 					{ '.', SymbolKind::period            },
+					{ '^', SymbolKind::caret             },
 					{ '(', SymbolKind::parenthesis_start },
 					{ ')', SymbolKind::parenthesis_end   }
 				};
@@ -222,17 +224,68 @@ internal i32 get_operator_value(SymbolKind kind)
 {
 	switch (kind)
 	{
+		case SymbolKind::caret:
+		return 3;
+
 		case SymbolKind::asterisk:
 		case SymbolKind::forward_slash:
-		return 9;
+		return 2;
 
 		case SymbolKind::plus:
 		case SymbolKind::minus:
-		return 8;
+		return 1;
 
-		// @NOTE@ Not an operator.
 		default:
 		return 0;
+	}
+}
+
+internal i32 get_operator_value(Token token)
+{
+	if (token.kind == TokenKind::symbol)
+	{
+		return get_operator_value(token.symbol.kind);
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+enum struct Associativity : u8
+{
+	null,
+	left,
+	right
+};
+
+internal Associativity get_operator_associativity(SymbolKind kind)
+{
+	switch (kind)
+	{
+		case SymbolKind::plus:
+		case SymbolKind::minus:
+		case SymbolKind::asterisk:
+		case SymbolKind::forward_slash:
+		return Associativity::left;
+
+		case SymbolKind::caret:
+		return Associativity::right;
+
+		default:
+		return Associativity::null;
+	}
+}
+
+internal Associativity get_operator_associativity(Token token)
+{
+	if (token.kind == TokenKind::symbol)
+	{
+		return get_operator_associativity(token.symbol.kind);
+	}
+	else
+	{
+		return Associativity::null;
 	}
 }
 
@@ -241,101 +294,65 @@ internal Token peek_token(Tokenizer tokenizer)
 	return eat_token(&tokenizer);
 }
 
-internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, ExpressionTree* left_hand_side = 0, i32 current_precedence = 0)
+// @NOTE@ https://eli.thegreenplace.net/2012/08/02/parsing-expressions-by-precedence-climbing
+internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precendence = 1)
 {
-	#if 1
-	if (!left_hand_side)
+	ExpressionTree* current_tree;
 	{
-		Token token = eat_token(tokenizer);
+		Token token = peek_token(*tokenizer);
 
-		if (token.kind == TokenKind::symbol)
+		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::semicolon)
 		{
-			if (token.symbol.kind == SymbolKind::semicolon)
-			{
-				ASSERT(current_precedence == 0);
-				return 0;
-			}
-			else
-			{
-				ASSERT(false); // Unknown symbol encountered.
-			}
+			return 0;
 		}
 		else if (token.kind == TokenKind::number)
 		{
-			left_hand_side = init_single_expression_tree(allocator, token, 0, 0);
+			eat_token(tokenizer);
+			current_tree = init_single_expression_tree(allocator, token, 0, 0);
 		}
 		else
 		{
-			ASSERT(false); // Unknown token encountered.
-		}
-	}
-
-	Token token = peek_token(*tokenizer);
-
-	if (token.kind == TokenKind::symbol)
-	{
-		i32 operator_value = get_operator_value(token.symbol.kind);
-
-		if (operator_value)
-		{
-			if (operator_value > current_precedence)
-			{
-				eat_token(tokenizer);
-				ExpressionTree* tree = init_single_expression_tree(allocator, token, left_hand_side, eat_expression(tokenizer, allocator, 0, operator_value));
-
-				if (current_precedence == 0)
-				{
-					return eat_expression(tokenizer, allocator, tree, 0);
-				}
-				else
-				{
-					while (true)
-					{
-						token = peek_token(*tokenizer);
-
-						if (token.kind == TokenKind::symbol && tree->token.kind == TokenKind::symbol)
-						{
-							if (get_operator_value(token.symbol.kind) >= get_operator_value(tree->token.symbol.kind))
-							{
-								eat_token(tokenizer);
-								tree = init_single_expression_tree(allocator, token, tree, eat_expression(tokenizer, allocator, 0, operator_value));
-							}
-							else
-							{
-								break;
-							}
-						}
-						else
-						{
-							break;
-						}
-					}
-
-					return tree;
-				}
-			}
-			else
-			{
-				return left_hand_side;
-			}
-		}
-		else if (token.symbol.kind == SymbolKind::semicolon)
-		{
-			return left_hand_side;
-		}
-		else
-		{
-			ASSERT(false); // Unknown symbol encountered after a number.
+			ASSERT(false); // Unknown token.
 			return 0;
 		}
 	}
-	else
+
+	while (true)
 	{
-		ASSERT(false); // Unknown token encountered after a number.
-		return 0;
+		Token token = peek_token(*tokenizer);
+
+		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::semicolon)
+		{
+			break;
+		}
+		else
+		{
+			ASSERT(get_operator_value(token));
+
+			if (get_operator_value(token) >= min_precendence)
+			{
+				eat_token(tokenizer);
+
+				i32 next_min_precendence = get_operator_value(token);
+				if (get_operator_associativity(token) == Associativity::left)
+				{
+					next_min_precendence += 1;
+				}
+				else
+				{
+					ASSERT(get_operator_associativity(token) == Associativity::right);
+				}
+
+				current_tree = init_single_expression_tree(allocator, token, current_tree, eat_expression(tokenizer, allocator, next_min_precendence));
+			}
+			else
+			{
+				break;
+			}
+		}
 	}
-	#else
-	#endif
+
+	return current_tree;
 }
 
 #if DEBUG
