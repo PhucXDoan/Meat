@@ -1,11 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "unified.h"
 
 #define IS_ALPHA(C)         (IN_RANGE((C), 'a', 'z' + 1) && IN_RANGE((C), 'A', 'Z' + 1))
 #define IS_DIGIT(C)         (IN_RANGE((C), '0', '9' + 1))
 #define PASS_STRING(STRING) (STRING).size, (STRING).data
-#define STRLIT(STR)         (String { sizeof(STR), STR });
+#define STRLIT(STR)         (String { sizeof(STR) - 1, STR });
 
 struct String
 {
@@ -27,7 +28,7 @@ enum struct SymbolKind : u8
 	parenthesis_start,
 	parenthesis_end,
 
-	application
+	parenthetical_application
 };
 
 enum struct TokenKind : u8
@@ -146,6 +147,7 @@ internal void eat_white_space(Tokenizer* tokenizer)
 	}
 }
 
+// @TODO@ Leading decimal support.
 internal Token eat_token(Tokenizer* tokenizer)
 {
 	eat_white_space(tokenizer);
@@ -227,18 +229,28 @@ internal Token eat_token(Tokenizer* tokenizer)
 	}
 }
 
+internal Token peek_token(Tokenizer tokenizer)
+{
+	return eat_token(&tokenizer);
+}
+
 internal bool32 get_operator_info(i32* precedence, bool32* is_right_associative, SymbolKind kind)
 {
 	switch (kind)
 	{
 		case SymbolKind::exclamation_point:
-		*precedence           = 3;
+		*precedence           = 4;
 		*is_right_associative = false;
 		return true;
 
 		case SymbolKind::caret:
-		*precedence           = 2;
+		*precedence           = 3;
 		*is_right_associative = true;
+		return true;
+
+		case SymbolKind::parenthetical_application:
+		*precedence           = 2;
+		*is_right_associative = false;
 		return true;
 
 		case SymbolKind::asterisk:
@@ -258,75 +270,105 @@ internal bool32 get_operator_info(i32* precedence, bool32* is_right_associative,
 }
 
 // @NOTE@ https://eli.thegreenplace.net/2012/08/02/parsing-expressions-by-precedence-climbing
-internal ExpressionTree* eat_expression(Token* terminating_token, Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precedence = 0)
+internal ExpressionTree* eat_expression(Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precedence = 0)
 {
-	ExpressionTree* current_tree  = 0;
-	Token           current_token = eat_token(tokenizer);
+	Token parenthetical_application_token;
+	parenthetical_application_token.kind        = TokenKind::symbol;
+	parenthetical_application_token.string      = STRLIT("()");
+	parenthetical_application_token.symbol.kind = SymbolKind::parenthetical_application;
 
-	if (current_token.kind == TokenKind::symbol && current_token.symbol.kind == SymbolKind::parenthesis_start)
-	{
-		current_tree = eat_expression(&current_token, tokenizer, allocator, 0);
-		ASSERT(current_tree);
-		ASSERT(current_token.kind == TokenKind::symbol && current_token.symbol.kind == SymbolKind::parenthesis_end);
-		current_token = eat_token(tokenizer);
-	}
-	else if (current_token.kind == TokenKind::symbol && current_token.symbol.kind == SymbolKind::minus)
-	{
-		i32    multiplication_precedence;
-		bool32 multiplication_is_right_associative;
-		bool32 is_multiplication_operator = get_operator_info(&multiplication_precedence, &multiplication_is_right_associative, SymbolKind::asterisk);
-		ASSERT(is_multiplication_operator);
+	i32    parenthetical_application_precedence;
+	bool32 parenthetical_application_is_right_associative;
+	bool32 is_parenthetical_application_operator = get_operator_info(&parenthetical_application_precedence, &parenthetical_application_is_right_associative, SymbolKind::parenthetical_application);
+	ASSERT(is_parenthetical_application_operator);
 
-		current_tree        = init_single_expression_tree(allocator, current_token, 0, 0);
-		current_tree->right = eat_expression(&current_token, tokenizer, allocator, multiplication_precedence + (multiplication_is_right_associative ? 0 : 1));
-	}
-	else if (current_token.kind == TokenKind::number)
+	Token multiplication_token;
+	multiplication_token.kind        = TokenKind::symbol;
+	multiplication_token.string      = STRLIT("*");
+	multiplication_token.symbol.kind = SymbolKind::asterisk;
+
+	i32    multiplication_precedence;
+	bool32 multiplication_is_right_associative;
+	bool32 is_multiplication_operator = get_operator_info(&multiplication_precedence, &multiplication_is_right_associative, SymbolKind::asterisk);
+	ASSERT(is_multiplication_operator);
+
+	ExpressionTree* current_tree;
+
 	{
-		current_tree  = init_single_expression_tree(allocator, current_token, 0, 0);
-		current_token = eat_token(tokenizer);
-	}
-	else
-	{
-		*terminating_token = current_token;
-		return current_tree;
+		Token token = peek_token(*tokenizer);
+
+		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start)
+		{
+			eat_token(tokenizer);
+			current_tree = eat_expression(tokenizer, allocator, 0);
+			ASSERT(current_tree);
+			token = eat_token(tokenizer);
+			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
+			current_tree = init_single_expression_tree(allocator, parenthetical_application_token, 0, current_tree);
+		}
+		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::minus)
+		{
+			eat_token(tokenizer);
+			current_tree = init_single_expression_tree(allocator, token, 0, eat_expression(tokenizer, allocator, multiplication_precedence + (multiplication_is_right_associative ? 0 : 1)));
+		}
+		else if (token.kind == TokenKind::number)
+		{
+			eat_token(tokenizer);
+			current_tree = init_single_expression_tree(allocator, token, 0, 0);
+		}
+		else
+		{
+			return 0;
+		}
 	}
 
-	i32    operator_precedence;
-	bool32 operator_is_right_associative;
 	while (true)
 	{
-		if (current_token.kind == TokenKind::symbol && get_operator_info(&operator_precedence, &operator_is_right_associative, current_token.symbol.kind) && operator_precedence >= min_precedence)
+		Token  token = peek_token(*tokenizer);
+		i32    operator_precedence;
+		bool32 operator_is_right_associative;
+		if (token.kind == TokenKind::symbol && get_operator_info(&operator_precedence, &operator_is_right_associative, token.symbol.kind) && operator_precedence >= min_precedence)
 		{
-			if (current_token.symbol.kind == SymbolKind::exclamation_point)
+			eat_token(tokenizer);
+			if (token.symbol.kind == SymbolKind::exclamation_point)
 			{
-				current_tree  = init_single_expression_tree(allocator, current_token, current_tree, 0);
-				current_token = eat_token(tokenizer);
+				current_tree = init_single_expression_tree(allocator, token, current_tree, 0);
 			}
 			else
 			{
-				current_tree  = init_single_expression_tree(allocator, current_token, current_tree, eat_expression(terminating_token, tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
-				current_token = *terminating_token;
+				current_tree = init_single_expression_tree(allocator, token, current_tree, eat_expression(tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
 				ASSERT(current_tree->right);
 			}
 		}
-		else if (current_token.kind == TokenKind::symbol && current_token.symbol.kind == SymbolKind::parenthesis_start)
+		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start && parenthetical_application_precedence >= min_precedence)
+		{ // @TODO@ This is assuming all parenthetical applications are multiplications.
+			eat_token(tokenizer);
+			ExpressionTree* right_hand_side = eat_expression(tokenizer, allocator, 0);
+			token = eat_token(tokenizer);
+			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
+			current_tree = init_single_expression_tree(allocator, parenthetical_application_token, 0, init_single_expression_tree(allocator, parenthetical_application_token, current_tree, right_hand_side));
+		}
+		else if (token.kind == TokenKind::number && current_tree->token.kind == TokenKind::symbol && current_tree->token.symbol.kind == SymbolKind::parenthetical_application && parenthetical_application_precedence >= min_precedence)
 		{
-			Token application_token;
-			application_token.kind        = TokenKind::symbol;
-			application_token.string      = STRLIT("()");
-			application_token.symbol.kind = SymbolKind::application;
-
-			current_tree  = init_single_expression_tree(allocator, application_token, current_tree, eat_expression(terminating_token, tokenizer, allocator, 0));
-			ASSERT(terminating_token->kind == TokenKind::symbol && terminating_token->symbol.kind == SymbolKind::parenthesis_end);
-			current_token = eat_token(tokenizer);
+			current_tree = init_single_expression_tree(allocator, multiplication_token, current_tree, eat_expression(tokenizer, allocator, multiplication_precedence));
 		}
 		else
 		{
 			break;
 		}
 	}
-	*terminating_token = current_token;
+
 	return current_tree;
+}
+
+// @TODO@ Make this more robust.
+internal f32 parse_number(String string)
+{
+	char buffer[64];
+	sprintf_s(buffer, sizeof(buffer), "%.*s", PASS_STRING(string));
+	f32 result;
+	sscanf_s(buffer, "%f", &result);
+	return result;
 }
 
 #if DEBUG
@@ -390,6 +432,95 @@ internal bool32 DEBUG_expression_tree_eq(ExpressionTree* a, ExpressionTree* b)
 		return false;
 	}
 }
+
+internal f32 DEBUG_evaluate_expression_tree(ExpressionTree* tree)
+{
+	ASSERT(tree);
+
+	switch (tree->token.kind)
+	{
+		case TokenKind::symbol:
+		{
+			switch (tree->token.symbol.kind)
+			{
+				case SymbolKind::plus:
+				{
+					return DEBUG_evaluate_expression_tree(tree->left) + DEBUG_evaluate_expression_tree(tree->right);
+				} break;
+
+				case SymbolKind::minus:
+				{
+					if (tree->left)
+					{
+						return DEBUG_evaluate_expression_tree(tree->left) - DEBUG_evaluate_expression_tree(tree->right);
+					}
+					else
+					{
+						return -DEBUG_evaluate_expression_tree(tree->right);
+					}
+				} break;
+
+				case SymbolKind::asterisk:
+				{
+					return DEBUG_evaluate_expression_tree(tree->left) * DEBUG_evaluate_expression_tree(tree->right);
+				} break;
+
+				case SymbolKind::forward_slash:
+				{
+					return DEBUG_evaluate_expression_tree(tree->left) / DEBUG_evaluate_expression_tree(tree->right);
+				} break;
+
+				case SymbolKind::caret:
+				{
+					return powf(DEBUG_evaluate_expression_tree(tree->left), DEBUG_evaluate_expression_tree(tree->right));
+				} break;
+
+				case SymbolKind::exclamation_point:
+				{
+					ASSERT(!tree->right);
+					return static_cast<f32>(tgamma(DEBUG_evaluate_expression_tree(tree->left) + 1.0));
+				} break;
+
+				case SymbolKind::parenthetical_application:
+				{
+					if (tree->left)
+					{ // @TODO@ This is assuming all parenthetical applications are multiplications.
+						return DEBUG_evaluate_expression_tree(tree->left) * DEBUG_evaluate_expression_tree(tree->right);
+					}
+					else
+					{
+						return DEBUG_evaluate_expression_tree(tree->right);
+					}
+				} break;
+
+				default:
+				{
+					ASSERT(false); // Unknown symbol.
+					return 0.0f;
+				} break;
+			}
+		} break;
+
+		case TokenKind::number:
+		{
+			ASSERT(!tree->left);
+			ASSERT(!tree->right);
+			return parse_number(tree->token.string);
+		} break;
+
+		case TokenKind::identifier:
+		{
+			ASSERT(false); // @TODO@
+			return 0.0f;
+		} break;
+
+		default:
+		{
+			ASSERT(false); // Unknown token.
+			return 0.0f;
+		} break;
+	}
+}
 #endif
 
 int main(void)
@@ -418,13 +549,16 @@ int main(void)
 	expression_tree_allocator.available_expression_tree[EXPRESSION_TREE_COUNT - 1].left = 0;
 
 	{
-		Token terminating_token;
-		ExpressionTree* expression_tree = eat_expression(&terminating_token, &tokenizer, &expression_tree_allocator);
+		ExpressionTree* expression_tree = eat_expression(&tokenizer, &expression_tree_allocator);
 		DEFER { deinit_entire_expression_tree(&expression_tree_allocator, expression_tree); };
+		Token terminating_token = eat_token(&tokenizer);
 		DEBUG_print_expression_tree(expression_tree);
 		ASSERT(terminating_token.kind == TokenKind::symbol && terminating_token.symbol.kind == SymbolKind::semicolon);
+
+		DEBUG_printf(">> %f\n", DEBUG_evaluate_expression_tree(expression_tree));
 	}
 
+	tokenizer.current_index = 0;
 	while (true)
 	{
 		Token token = eat_token(&tokenizer);
@@ -436,7 +570,14 @@ int main(void)
 		}
 		else
 		{
-			DEBUG_printf("Token : `%.*s`\n", PASS_STRING(token.string));
+			if (token.kind == TokenKind::number)
+			{
+				DEBUG_printf("Token : `%.*s` : %f\n", PASS_STRING(token.string), parse_number(token.string));
+			}
+			else
+			{
+				DEBUG_printf("Token : `%.*s`\n", PASS_STRING(token.string));
+			}
 		}
 	}
 
