@@ -249,36 +249,46 @@ internal bool32 get_operator_info(i32* precedence, bool32* is_right_associative,
 // @NOTE@ https://eli.thegreenplace.net/2012/08/02/parsing-expressions-by-precedence-climbing
 internal ExpressionTree* eat_expression(Token* terminating_token, Tokenizer* tokenizer, ExpressionTreeAllocator* allocator, i32 min_precedence = 0)
 {
-	ExpressionTree* current_tree;
-	{
-		Token token = eat_token(tokenizer);
+	ExpressionTree* current_tree  = 0;
+	Token           current_token = eat_token(tokenizer);
 
-		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start)
-		{
-			current_tree = eat_expression(&token, tokenizer, allocator, 0);
-			ASSERT(current_tree);
-			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
-		}
-		else if (token.kind == TokenKind::number)
-		{
-			current_tree = init_single_expression_tree(allocator, token, 0, 0);
-		}
-		else
-		{
-			*terminating_token = token;
-			return 0;
-		}
+	if (current_token.kind == TokenKind::symbol && current_token.symbol.kind == SymbolKind::parenthesis_start)
+	{
+		current_tree = eat_expression(&current_token, tokenizer, allocator, 0);
+		ASSERT(current_tree);
+		ASSERT(current_token.kind == TokenKind::symbol && current_token.symbol.kind == SymbolKind::parenthesis_end);
+		current_token = eat_token(tokenizer);
+	}
+	else if (current_token.kind == TokenKind::symbol && current_token.symbol.kind == SymbolKind::minus)
+	{
+		i32    multiplication_precedence;
+		bool32 multiplication_is_right_associative;
+		bool32 is_multiplication_operator = get_operator_info(&multiplication_precedence, &multiplication_is_right_associative, SymbolKind::asterisk);
+		ASSERT(is_multiplication_operator);
+
+		current_tree        = init_single_expression_tree(allocator, current_token, 0, 0);
+		current_tree->right = eat_expression(&current_token, tokenizer, allocator, multiplication_precedence + (multiplication_is_right_associative ? 0 : 1));
+	}
+	else if (current_token.kind == TokenKind::number)
+	{
+		current_tree  = init_single_expression_tree(allocator, current_token, 0, 0);
+		current_token = eat_token(tokenizer);
+	}
+	else
+	{
+		*terminating_token = current_token;
+		return current_tree;
 	}
 
-	Token  token = eat_token(tokenizer);
 	i32    operator_precedence;
 	bool32 operator_is_right_associative;
-	while (token.kind == TokenKind::symbol && get_operator_info(&operator_precedence, &operator_is_right_associative, token.symbol.kind) && operator_precedence >= min_precedence)
+	while (current_token.kind == TokenKind::symbol && get_operator_info(&operator_precedence, &operator_is_right_associative, current_token.symbol.kind) && operator_precedence >= min_precedence)
 	{
-		current_tree = init_single_expression_tree(allocator, token, current_tree, eat_expression(terminating_token, tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
-		token = *terminating_token;
+		current_tree  = init_single_expression_tree(allocator, current_token, current_tree, eat_expression(terminating_token, tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
+		current_token = *terminating_token;
+		ASSERT(current_tree->right);
 	}
-	*terminating_token = token;
+	*terminating_token = current_token;
 	return current_tree;
 }
 
