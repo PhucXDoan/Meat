@@ -5,6 +5,7 @@
 #define IS_ALPHA(C)         (IN_RANGE((C), 'a', 'z' + 1) && IN_RANGE((C), 'A', 'Z' + 1))
 #define IS_DIGIT(C)         (IN_RANGE((C), '0', '9' + 1))
 #define PASS_STRING(STRING) (STRING).size, (STRING).data
+#define STRLIT(STR)         (String { sizeof(STR), STR });
 
 struct String
 {
@@ -25,13 +26,16 @@ enum struct SymbolKind : u8
 	exclamation_point,
 	parenthesis_start,
 	parenthesis_end,
+
+	application
 };
 
 enum struct TokenKind : u8
 {
 	null,
 	symbol,
-	number
+	number,
+	identifier
 };
 
 struct Token
@@ -66,28 +70,29 @@ struct ExpressionTreeAllocator
 	ExpressionTree* available_expression_tree;
 };
 
-// @TODO@ Handle non-existing file.
-internal String init_string_from_file(strlit file_path)
+// @TODO@ Handle non-existing files.
+internal Tokenizer init_tokenizer_from_file(strlit file_path)
 {
 	FILE* file;
 	errno_t file_errno = fopen_s(&file, file_path, "rb");
 	ASSERT(file_errno == 0);
 	DEFER { fclose(file); };
 
-	String string;
+	Tokenizer tokenizer;
+	tokenizer.current_index = 0;
 
 	fseek(file, 0, SEEK_END);
-	string.size = ftell(file);
-	string.data = reinterpret_cast<char*>(malloc(string.size));
+	tokenizer.stream.size = ftell(file);
+	tokenizer.stream.data = reinterpret_cast<char*>(malloc(tokenizer.stream.size));
 	fseek(file, 0, SEEK_SET);
-	fread(string.data, sizeof(char), string.size, file);
+	fread(tokenizer.stream.data, sizeof(char), tokenizer.stream.size, file);
 
-	return string;
+	return tokenizer;
 }
 
-internal void deinit_string_from_file(String file)
+internal void deinit_tokenizer_from_file(Tokenizer tokenizer)
 {
-	free(file.data);
+	free(tokenizer.stream.data);
 }
 
 internal ExpressionTree* init_single_expression_tree(ExpressionTreeAllocator* allocator, Token token, ExpressionTree* left, ExpressionTree* right)
@@ -288,18 +293,36 @@ internal ExpressionTree* eat_expression(Token* terminating_token, Tokenizer* tok
 
 	i32    operator_precedence;
 	bool32 operator_is_right_associative;
-	while (current_token.kind == TokenKind::symbol && get_operator_info(&operator_precedence, &operator_is_right_associative, current_token.symbol.kind) && operator_precedence >= min_precedence)
+	while (true)
 	{
-		if (current_token.symbol.kind == SymbolKind::exclamation_point)
+		if (current_token.kind == TokenKind::symbol && get_operator_info(&operator_precedence, &operator_is_right_associative, current_token.symbol.kind) && operator_precedence >= min_precedence)
 		{
-			current_tree  = init_single_expression_tree(allocator, current_token, current_tree, 0);
+			if (current_token.symbol.kind == SymbolKind::exclamation_point)
+			{
+				current_tree  = init_single_expression_tree(allocator, current_token, current_tree, 0);
+				current_token = eat_token(tokenizer);
+			}
+			else
+			{
+				current_tree  = init_single_expression_tree(allocator, current_token, current_tree, eat_expression(terminating_token, tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
+				current_token = *terminating_token;
+				ASSERT(current_tree->right);
+			}
+		}
+		else if (current_token.kind == TokenKind::symbol && current_token.symbol.kind == SymbolKind::parenthesis_start)
+		{
+			Token application_token;
+			application_token.kind        = TokenKind::symbol;
+			application_token.string      = STRLIT("()");
+			application_token.symbol.kind = SymbolKind::application;
+
+			current_tree  = init_single_expression_tree(allocator, application_token, current_tree, eat_expression(terminating_token, tokenizer, allocator, 0));
+			ASSERT(terminating_token->kind == TokenKind::symbol && terminating_token->symbol.kind == SymbolKind::parenthesis_end);
 			current_token = eat_token(tokenizer);
 		}
 		else
 		{
-			current_tree  = init_single_expression_tree(allocator, current_token, current_tree, eat_expression(terminating_token, tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
-			current_token = *terminating_token;
-			ASSERT(current_tree->right);
+			break;
 		}
 	}
 	*terminating_token = current_token;
@@ -307,7 +330,7 @@ internal ExpressionTree* eat_expression(Token* terminating_token, Tokenizer* tok
 }
 
 #if DEBUG
-internal void DEBUG_print_expression_tree(ExpressionTree* tree, i32 depth, u32 path)
+internal void DEBUG_print_expression_tree(ExpressionTree* tree, i32 depth = 0, u64 path = 0)
 {
 	if (tree)
 	{
@@ -316,7 +339,7 @@ internal void DEBUG_print_expression_tree(ExpressionTree* tree, i32 depth, u32 p
 			DEBUG_printf("Leaf : ");
 			FOR_RANGE(i, depth)
 			{
-				DEBUG_printf("%i", (path >> i) & 0b1);
+				DEBUG_printf("%llu", (path >> i) & 0b1);
 			}
 
 			DEBUG_printf(" : `%.*s`\n", PASS_STRING(tree->token.string));
@@ -326,17 +349,17 @@ internal void DEBUG_print_expression_tree(ExpressionTree* tree, i32 depth, u32 p
 			DEBUG_printf("Branch : ");
 			FOR_RANGE(i, depth)
 			{
-				DEBUG_printf("%i", (path >> i) & 0b1);
+				DEBUG_printf("%llu", (path >> i) & 0b1);
 			}
 			DEBUG_printf(" : `%.*s`\n", PASS_STRING(tree->token.string));
 
 			if (tree->left)
 			{
-				DEBUG_print_expression_tree(tree->left, depth + 1, path & ~(1 << depth));
+				DEBUG_print_expression_tree(tree->left, depth + 1, path & ~(1ULL << depth));
 			}
 			if (tree->right)
 			{
-				DEBUG_print_expression_tree(tree->right, depth + 1, path | (1 << depth));
+				DEBUG_print_expression_tree(tree->right, depth + 1, path | (1ULL << depth));
 			}
 		}
 	}
@@ -371,18 +394,13 @@ internal bool32 DEBUG_expression_tree_eq(ExpressionTree* a, ExpressionTree* b)
 
 int main(void)
 {
-	String file_string = init_string_from_file(DATA_DIR "basic_expressions.meat");
-	DEFER { deinit_string_from_file(file_string); };
-
-	Tokenizer tokenizer;
-	tokenizer.stream        = file_string;
-	tokenizer.current_index = 0;
+	Tokenizer tokenizer = init_tokenizer_from_file(DATA_DIR "basic_expressions.meat");
+	DEFER { deinit_tokenizer_from_file(tokenizer); };
 
 	constexpr i32 EXPRESSION_TREE_COUNT = 64;
 	ExpressionTreeAllocator expression_tree_allocator;
 	expression_tree_allocator.memory                    = reinterpret_cast<ExpressionTree*>(malloc(EXPRESSION_TREE_COUNT * sizeof(ExpressionTree)));
 	expression_tree_allocator.available_expression_tree = expression_tree_allocator.memory;
-
 	DEFER
 	{
 		i32 counter = 0;
@@ -391,7 +409,6 @@ int main(void)
 			counter += 1;
 		}
 		ASSERT(counter == EXPRESSION_TREE_COUNT);
-
 		free(expression_tree_allocator.memory);
 	};
 	FOR_RANGE(i, EXPRESSION_TREE_COUNT - 1)
@@ -400,12 +417,13 @@ int main(void)
 	}
 	expression_tree_allocator.available_expression_tree[EXPRESSION_TREE_COUNT - 1].left = 0;
 
-	Token           terminating_token;
-	ExpressionTree* expression_tree = eat_expression(&terminating_token, &tokenizer, &expression_tree_allocator);
-	DEFER { deinit_entire_expression_tree(&expression_tree_allocator, expression_tree); };
-	ASSERT(terminating_token.kind == TokenKind::symbol && terminating_token.symbol.kind == SymbolKind::semicolon);
-
-	DEBUG_print_expression_tree(expression_tree, 0, 0);
+	{
+		Token terminating_token;
+		ExpressionTree* expression_tree = eat_expression(&terminating_token, &tokenizer, &expression_tree_allocator);
+		DEFER { deinit_entire_expression_tree(&expression_tree_allocator, expression_tree); };
+		DEBUG_print_expression_tree(expression_tree);
+		ASSERT(terminating_token.kind == TokenKind::symbol && terminating_token.symbol.kind == SymbolKind::semicolon);
+	}
 
 	while (true)
 	{
