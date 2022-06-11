@@ -405,9 +405,13 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
 			current_tree = init_single_syntax_tree(allocator, parenthetical_application_token, 0, init_single_syntax_tree(allocator, parenthetical_application_token, current_tree, right_hand_side));
 		}
-		else if (token.kind == TokenKind::number && current_tree->token.kind == TokenKind::symbol && current_tree->token.symbol.kind == SymbolKind::parenthetical_application && parenthetical_application_precedence >= min_precedence)
+		else if
+		(
+			(token.kind == TokenKind::number && (current_tree->token.kind == TokenKind::identifier || current_tree->token.kind == TokenKind::symbol && current_tree->token.symbol.kind == SymbolKind::parenthetical_application)) ||
+			token.kind == TokenKind::identifier && parenthetical_application_precedence >= min_precedence
+		)
 		{
-			current_tree = init_single_syntax_tree(allocator, multiplication_token, current_tree, eat_syntax_tree(tokenizer, allocator, multiplication_precedence));
+			current_tree = init_single_syntax_tree(allocator, multiplication_token, current_tree, eat_syntax_tree(tokenizer, allocator, multiplication_precedence + (multiplication_is_right_associative ? 0 : 1)));
 		}
 		else
 		{
