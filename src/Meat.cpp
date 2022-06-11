@@ -464,6 +464,92 @@ internal void DEBUG_print_syntax_tree(SyntaxTree* tree, i32 depth = 0, u64 path 
 	}
 }
 
+internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
+{
+	if (tree)
+	{
+		switch (tree->token.kind)
+		{
+			case TokenKind::symbol:
+			{
+				switch (tree->token.symbol.kind)
+				{
+					case SymbolKind::plus:
+					{
+						DEBUG_print_serialized_syntax_tree(tree->left);
+						DEBUG_printf(" + ");
+						DEBUG_print_serialized_syntax_tree(tree->right);
+					} break;
+
+					case SymbolKind::minus:
+					{
+						if (tree->left)
+						{
+							DEBUG_print_serialized_syntax_tree(tree->left);
+							DEBUG_printf(" - ");
+							DEBUG_print_serialized_syntax_tree(tree->right);
+						}
+						else
+						{
+							DEBUG_printf("-");
+							DEBUG_print_serialized_syntax_tree(tree->right);
+						}
+					} break;
+
+					case SymbolKind::asterisk:
+					{
+						if (tree->left->token.kind == TokenKind::symbol && tree->left->token.symbol.kind == SymbolKind::parenthetical_application || tree->right->token.kind == TokenKind::symbol && tree->right->token.symbol.kind == SymbolKind::parenthetical_application)
+						{
+							DEBUG_print_serialized_syntax_tree(tree->left);
+							DEBUG_print_serialized_syntax_tree(tree->right);
+						}
+						else
+						{
+							DEBUG_print_serialized_syntax_tree(tree->left);
+							DEBUG_printf(" * ");
+							DEBUG_print_serialized_syntax_tree(tree->right);
+						}
+					} break;
+
+					case SymbolKind::forward_slash:
+					{
+						DEBUG_print_serialized_syntax_tree(tree->left);
+						DEBUG_printf("/");
+						DEBUG_print_serialized_syntax_tree(tree->right);
+					} break;
+
+					case SymbolKind::exclamation_point:
+					{
+						DEBUG_print_serialized_syntax_tree(tree->left);
+						DEBUG_printf("!");
+					} break;
+
+					case SymbolKind::parenthetical_application:
+					{
+						DEBUG_print_serialized_syntax_tree(tree->left);
+						DEBUG_printf("(");
+						DEBUG_print_serialized_syntax_tree(tree->right);
+						DEBUG_printf(")");
+					} break;
+
+					case SymbolKind::equal:
+					{
+						DEBUG_print_serialized_syntax_tree(tree->left);
+						DEBUG_printf(" = ");
+						DEBUG_print_serialized_syntax_tree(tree->right);
+					} break;
+				}
+			} break;
+
+			case TokenKind::number:
+			case TokenKind::identifier:
+			{
+				DEBUG_printf("%.*s", PASS_STRING(tree->token.string));
+			} break;
+		}
+	}
+}
+
 internal bool32 DEBUG_token_eq(Token a, Token b)
 {
 	if (a.kind == TokenKind::symbol && b.kind == TokenKind::symbol && a.symbol.kind != b.symbol.kind)
@@ -491,6 +577,7 @@ internal bool32 DEBUG_syntax_tree_eq(SyntaxTree* a, SyntaxTree* b)
 }
 #endif
 
+internal f32 evaluate_identifier(String identifier_name, Ledger* ledger);
 internal f32 evaluate_expression(SyntaxTree* tree, Ledger* ledger)
 {
 	ASSERT(tree);
@@ -570,37 +657,7 @@ internal f32 evaluate_expression(SyntaxTree* tree, Ledger* ledger)
 		{
 			ASSERT(!tree->left);
 			ASSERT(!tree->right);
-
-			FOR_ELEMS(it, ledger->declaration_buffer, ledger->declaration_count)
-			{
-				if (string_eq(it->string, tree->token.string))
-				{
-					switch (it->status)
-					{
-						case DeclarationStatus::yet_calculated:
-						{
-							it->status            = DeclarationStatus::currently_calculating;
-							it->cached_evaluation = evaluate_expression(it->definition, ledger);
-							it->status            = DeclarationStatus::cached;
-							return it->cached_evaluation;
-						} break;
-
-						case DeclarationStatus::currently_calculating:
-						{
-							ASSERT(false); // Circular definition.
-							return 0.0f;
-						} break;
-
-						case DeclarationStatus::cached:
-						{
-							return it->cached_evaluation;
-						} break;
-					}
-				}
-			}
-
-			ASSERT(false); // Couldn't find declaration.
-			return 0.0f;
+			return evaluate_identifier(tree->token.string, ledger);
 		} break;
 
 		default:
@@ -609,6 +666,40 @@ internal f32 evaluate_expression(SyntaxTree* tree, Ledger* ledger)
 			return 0.0f;
 		} break;
 	}
+}
+
+internal f32 evaluate_identifier(String identifier_name, Ledger* ledger)
+{
+	FOR_ELEMS(it, ledger->declaration_buffer, ledger->declaration_count)
+	{
+		if (string_eq(it->string, identifier_name))
+		{
+			switch (it->status)
+			{
+				case DeclarationStatus::yet_calculated:
+				{
+					it->status            = DeclarationStatus::currently_calculating;
+					it->cached_evaluation = evaluate_expression(it->definition, ledger);
+					it->status            = DeclarationStatus::cached;
+					return it->cached_evaluation;
+				} break;
+
+				case DeclarationStatus::currently_calculating:
+				{
+					ASSERT(false); // Circular definition.
+					return 0.0f;
+				} break;
+
+				case DeclarationStatus::cached:
+				{
+					return it->cached_evaluation;
+				} break;
+			}
+		}
+	}
+
+	ASSERT(false); // Couldn't find declaration of identifier.
+	return 0.0f;
 }
 
 int main(void)
@@ -664,8 +755,8 @@ int main(void)
 		if (statement_buffer[statement_count])
 		{
 			statement_count += 1;
-			DEBUG_printf("===================\n");
 			DEBUG_print_syntax_tree(statement_buffer[statement_count - 1]);
+			DEBUG_printf("===================\n");
 		}
 
 		Token terminating_token = eat_token(&tokenizer);
@@ -696,11 +787,14 @@ int main(void)
 	{
 		if ((*it)->token.kind == TokenKind::symbol && (*it)->token.symbol.kind == SymbolKind::equal)
 		{
-			// @TODO@ Evaluate and cache.
+			ASSERT((*it)->left->token.kind == TokenKind::identifier);
+			DEBUG_print_serialized_syntax_tree(*it);
+			DEBUG_printf("\n:: %f\n", evaluate_identifier((*it)->left->token.string, &ledger));
 		}
 		else
 		{
-			DEBUG_printf(":: %f\n", evaluate_expression(*it, &ledger));
+			DEBUG_print_serialized_syntax_tree(*it);
+			DEBUG_printf("\n:: %f\n", evaluate_expression(*it, &ledger));
 		}
 	}
 
