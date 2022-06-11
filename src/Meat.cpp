@@ -72,14 +72,25 @@ struct SyntaxTreeAllocator
 	SyntaxTree* available_syntax_tree;
 };
 
+enum struct DeclarationStatus : u8
+{
+	yet_calculated,
+	currently_calculating,
+	cached
+};
+
+struct Declaration
+{
+	String            string;
+	SyntaxTree*       definition;
+	DeclarationStatus status;
+	f32               cached_evaluation;
+};
+
 struct Ledger
 {
-	i32 declaration_count;
-	struct
-	{
-		String      string;
-		SyntaxTree* definition;
-	} declaration_buffer[64];
+	i32         declaration_count;
+	Declaration declaration_buffer[64];
 };
 
 internal bool32 string_eq(String a, String b)
@@ -478,8 +489,9 @@ internal bool32 DEBUG_syntax_tree_eq(SyntaxTree* a, SyntaxTree* b)
 		return false;
 	}
 }
+#endif
 
-internal f32 DEBUG_evaluate_syntax_tree(SyntaxTree* tree, Ledger* ledger)
+internal f32 evaluate_expression(SyntaxTree* tree, Ledger* ledger)
 {
 	ASSERT(tree);
 
@@ -491,51 +503,51 @@ internal f32 DEBUG_evaluate_syntax_tree(SyntaxTree* tree, Ledger* ledger)
 			{
 				case SymbolKind::plus:
 				{
-					return DEBUG_evaluate_syntax_tree(tree->left, ledger) + DEBUG_evaluate_syntax_tree(tree->right, ledger);
+					return evaluate_expression(tree->left, ledger) + evaluate_expression(tree->right, ledger);
 				} break;
 
 				case SymbolKind::minus:
 				{
 					if (tree->left)
 					{
-						return DEBUG_evaluate_syntax_tree(tree->left, ledger) - DEBUG_evaluate_syntax_tree(tree->right, ledger);
+						return evaluate_expression(tree->left, ledger) - evaluate_expression(tree->right, ledger);
 					}
 					else
 					{
-						return -DEBUG_evaluate_syntax_tree(tree->right, ledger);
+						return -evaluate_expression(tree->right, ledger);
 					}
 				} break;
 
 				case SymbolKind::asterisk:
 				{
-					return DEBUG_evaluate_syntax_tree(tree->left, ledger) * DEBUG_evaluate_syntax_tree(tree->right, ledger);
+					return evaluate_expression(tree->left, ledger) * evaluate_expression(tree->right, ledger);
 				} break;
 
 				case SymbolKind::forward_slash:
 				{
-					return DEBUG_evaluate_syntax_tree(tree->left, ledger) / DEBUG_evaluate_syntax_tree(tree->right, ledger);
+					return evaluate_expression(tree->left, ledger) / evaluate_expression(tree->right, ledger);
 				} break;
 
 				case SymbolKind::caret:
 				{
-					return powf(DEBUG_evaluate_syntax_tree(tree->left, ledger), DEBUG_evaluate_syntax_tree(tree->right, ledger));
+					return powf(evaluate_expression(tree->left, ledger), evaluate_expression(tree->right, ledger));
 				} break;
 
 				case SymbolKind::exclamation_point:
 				{
 					ASSERT(!tree->right);
-					return static_cast<f32>(tgamma(DEBUG_evaluate_syntax_tree(tree->left, ledger) + 1.0));
+					return static_cast<f32>(tgamma(evaluate_expression(tree->left, ledger) + 1.0));
 				} break;
 
 				case SymbolKind::parenthetical_application:
 				{
 					if (tree->left)
 					{ // @TODO@ This is assuming all parenthetical applications are multiplications.
-						return DEBUG_evaluate_syntax_tree(tree->left, ledger) * DEBUG_evaluate_syntax_tree(tree->right, ledger);
+						return evaluate_expression(tree->left, ledger) * evaluate_expression(tree->right, ledger);
 					}
 					else
 					{
-						return DEBUG_evaluate_syntax_tree(tree->right, ledger);
+						return evaluate_expression(tree->right, ledger);
 					}
 				} break;
 
@@ -563,11 +575,31 @@ internal f32 DEBUG_evaluate_syntax_tree(SyntaxTree* tree, Ledger* ledger)
 			{
 				if (string_eq(it->string, tree->token.string))
 				{
-					return DEBUG_evaluate_syntax_tree(it->definition, ledger);
+					switch (it->status)
+					{
+						case DeclarationStatus::yet_calculated:
+						{
+							it->status            = DeclarationStatus::currently_calculating;
+							it->cached_evaluation = evaluate_expression(it->definition, ledger);
+							it->status            = DeclarationStatus::cached;
+							return it->cached_evaluation;
+						} break;
+
+						case DeclarationStatus::currently_calculating:
+						{
+							ASSERT(false); // Circular definition.
+							return 0.0f;
+						} break;
+
+						case DeclarationStatus::cached:
+						{
+							return it->cached_evaluation;
+						} break;
+					}
 				}
 			}
 
-			ASSERT(false); // @TEMP@ Couldn't find declaration.
+			ASSERT(false); // Couldn't find declaration.
 			return 0.0f;
 		} break;
 
@@ -578,35 +610,17 @@ internal f32 DEBUG_evaluate_syntax_tree(SyntaxTree* tree, Ledger* ledger)
 		} break;
 	}
 }
-#endif
-
-internal void interpret_syntax_tree(SyntaxTree* tree, Ledger* ledger)
-{
-	if (tree)
-	{
-		if (tree->token.kind == TokenKind::symbol && tree->token.symbol.kind == SymbolKind::equal)
-		{
-			ASSERT(tree->left->token.kind == TokenKind::identifier);
-			ASSERT(IN_RANGE(ledger->declaration_count, 0, ARRAY_CAPACITY(ledger->declaration_buffer)));
-
-			ledger->declaration_buffer[ledger->declaration_count].string     = tree->left->token.string;
-			ledger->declaration_buffer[ledger->declaration_count].definition = tree->right;
-			ledger->declaration_count += 1;
-		}
-		else
-		{
-			DEBUG_printf(":: %f\n", DEBUG_evaluate_syntax_tree(tree, ledger));
-			//ASSERT(false); // Unknown interpretation.
-		}
-	}
-}
 
 int main(void)
 {
+	//
+	// Initialization.
+	//
+
 	Tokenizer tokenizer = init_tokenizer_from_file(DATA_DIR "meat.meat");
 	DEFER { deinit_tokenizer_from_file(tokenizer); };
 
-	constexpr i32 EXPRESSION_TREE_COUNT = 64;
+	constexpr i32 EXPRESSION_TREE_COUNT = 256;
 	SyntaxTreeAllocator syntax_tree_allocator;
 	syntax_tree_allocator.memory                = reinterpret_cast<SyntaxTree*>(malloc(EXPRESSION_TREE_COUNT * sizeof(SyntaxTree)));
 	syntax_tree_allocator.available_syntax_tree = syntax_tree_allocator.memory;
@@ -628,45 +642,89 @@ int main(void)
 
 	Ledger ledger = {};
 
-	SyntaxTree* def_syntax_tree = eat_syntax_tree(&tokenizer, &syntax_tree_allocator);
-	DEFER { deinit_entire_syntax_tree(&syntax_tree_allocator, def_syntax_tree); };
+	SyntaxTree* statement_buffer[16];
+	i32         statement_count = 0;
+	DEFER
 	{
-		Token terminating_token = eat_token(&tokenizer);
-		ASSERT(terminating_token.kind == TokenKind::symbol && terminating_token.symbol.kind == SymbolKind::semicolon);
-		DEBUG_print_syntax_tree(def_syntax_tree);
-	}
-	interpret_syntax_tree(def_syntax_tree, &ledger);
-
-	SyntaxTree* display_syntax_tree = eat_syntax_tree(&tokenizer, &syntax_tree_allocator);
-	DEFER { deinit_entire_syntax_tree(&syntax_tree_allocator, display_syntax_tree); };
-	{
-		Token terminating_token = eat_token(&tokenizer);
-		ASSERT(terminating_token.kind == TokenKind::symbol && terminating_token.symbol.kind == SymbolKind::semicolon);
-		DEBUG_print_syntax_tree(display_syntax_tree);
-	}
-	interpret_syntax_tree(display_syntax_tree, &ledger);
-
-	while (true)
-	{
-		Token token = eat_token(&tokenizer);
-
-		if (token.kind == TokenKind::null)
+		FOR_ELEMS(it, statement_buffer, statement_count)
 		{
-			ASSERT(tokenizer.current_index == tokenizer.stream.size); // Tokenizer must finish the stream.
-			break;
+			deinit_entire_syntax_tree(&syntax_tree_allocator, *it);
+		}
+	};
+
+	//
+	// Interpreting.
+	//
+
+	while (peek_token(tokenizer).kind != TokenKind::null)
+	{
+		ASSERT(IN_RANGE(statement_count, 0, ARRAY_CAPACITY(statement_buffer)));
+		statement_buffer[statement_count] = eat_syntax_tree(&tokenizer, &syntax_tree_allocator);
+
+		if (statement_buffer[statement_count])
+		{
+			statement_count += 1;
+			DEBUG_printf("===================\n");
+			DEBUG_print_syntax_tree(statement_buffer[statement_count - 1]);
+		}
+
+		Token terminating_token = eat_token(&tokenizer);
+		ASSERT(terminating_token.kind == TokenKind::symbol && terminating_token.symbol.kind == SymbolKind::semicolon);
+	}
+
+	FOR_ELEMS(it, statement_buffer, statement_count)
+	{
+		if ((*it)->token.kind == TokenKind::symbol && (*it)->token.symbol.kind == SymbolKind::equal)
+		{
+			ASSERT((*it)->left->token.kind == TokenKind::identifier);
+			ASSERT(!(*it)->left->left);
+			ASSERT(!(*it)->left->right);
+			ASSERT(IN_RANGE(ledger.declaration_count, 0, ARRAY_CAPACITY(ledger.declaration_buffer)));
+			FOR_ELEMS(declaration, ledger.declaration_buffer, ledger.declaration_count)
+			{
+				ASSERT(!string_eq(declaration->string, (*it)->left->token.string));
+			}
+
+			ledger.declaration_buffer[ledger.declaration_count]            = {};
+			ledger.declaration_buffer[ledger.declaration_count].string     = (*it)->left->token.string;
+			ledger.declaration_buffer[ledger.declaration_count].definition = (*it)->right;
+			ledger.declaration_count += 1;
+		}
+	}
+
+	FOR_ELEMS(it, statement_buffer, statement_count)
+	{
+		if ((*it)->token.kind == TokenKind::symbol && (*it)->token.symbol.kind == SymbolKind::equal)
+		{
+			// @TODO@ Evaluate and cache.
 		}
 		else
 		{
-			if (token.kind == TokenKind::number)
-			{
-				DEBUG_printf("Token : `%.*s` : %f\n", PASS_STRING(token.string), parse_number(token.string));
-			}
-			else
-			{
-				DEBUG_printf("Token : `%.*s`\n", PASS_STRING(token.string));
-			}
+			DEBUG_printf(":: %f\n", evaluate_expression(*it, &ledger));
 		}
 	}
+
+	//while (true)
+	//{
+	//	Token token = eat_token(&tokenizer);
+
+	//	if (token.kind == TokenKind::null)
+	//	{
+	//		ASSERT(tokenizer.current_index == tokenizer.stream.size); // Tokenizer must finish the stream.
+	//		break;
+	//	}
+	//	else
+	//	{
+	//		if (token.kind == TokenKind::number)
+	//		{
+	//			DEBUG_printf("Token : `%.*s` : %f\n", PASS_STRING(token.string), parse_number(token.string));
+	//		}
+	//		else
+	//		{
+	//			DEBUG_printf("Token : `%.*s`\n", PASS_STRING(token.string));
+	//		}
+	//	}
+	//}
 
 	return 0;
 }
