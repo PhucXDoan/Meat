@@ -29,7 +29,8 @@ enum struct SymbolKind : u8
 	parenthesis_start,
 	parenthesis_end,
 
-	parenthetical_application
+	parenthetical_application,
+	assert
 };
 
 enum struct TokenKind : u8
@@ -218,17 +219,18 @@ internal Token eat_token(Tokenizer* tokenizer)
 		{
 			constexpr struct { strlit cstring; SymbolKind kind; } SYMBOLS[] =
 				{
-					{ ";", SymbolKind::semicolon         },
-					{ "+", SymbolKind::plus              },
-					{ "-", SymbolKind::minus             },
-					{ "*", SymbolKind::asterisk          },
-					{ "/", SymbolKind::forward_slash     },
-					{ ".", SymbolKind::period            },
-					{ "^", SymbolKind::caret             },
-					{ "!", SymbolKind::exclamation_point },
-					{ "=", SymbolKind::equal             },
-					{ "(", SymbolKind::parenthesis_start },
-					{ ")", SymbolKind::parenthesis_end   }
+					{ ";"     , SymbolKind::semicolon         },
+					{ "+"     , SymbolKind::plus              },
+					{ "-"     , SymbolKind::minus             },
+					{ "*"     , SymbolKind::asterisk          },
+					{ "/"     , SymbolKind::forward_slash     },
+					{ "."     , SymbolKind::period            },
+					{ "^"     , SymbolKind::caret             },
+					{ "!"     , SymbolKind::exclamation_point },
+					{ "="     , SymbolKind::equal             },
+					{ "("     , SymbolKind::parenthesis_start },
+					{ ")"     , SymbolKind::parenthesis_end   },
+					{ "ASSERT", SymbolKind::assert            }
 				};
 
 			FOR_ELEMS(SYMBOLS)
@@ -288,40 +290,59 @@ internal Token peek_token(Tokenizer tokenizer)
 	return eat_token(&tokenizer);
 }
 
-internal bool32 get_operator_info(i32* precedence, bool32* is_right_associative, SymbolKind kind)
+enum struct OperatorType : u8
+{
+	binary_left_associative,
+	binary_right_associative,
+	postfix,
+	prefix
+};
+
+struct OperatorInfo
+{
+	OperatorType type;
+	i32          precedence;
+};
+
+internal bool32 get_operator_info(OperatorInfo* operator_info, SymbolKind kind)
 {
 	switch (kind)
 	{
 		case SymbolKind::exclamation_point:
-		*precedence           = 5;
-		*is_right_associative = false;
+		operator_info->type       = OperatorType::postfix;
+		operator_info->precedence = 6;
 		return true;
 
 		case SymbolKind::caret:
-		*precedence           = 4;
-		*is_right_associative = true;
+		operator_info->type       = OperatorType::binary_right_associative;
+		operator_info->precedence = 5;
 		return true;
 
 		case SymbolKind::parenthetical_application:
-		*precedence           = 3;
-		*is_right_associative = false;
+		operator_info->type       = OperatorType::binary_left_associative;
+		operator_info->precedence = 4;
 		return true;
 
 		case SymbolKind::asterisk:
 		case SymbolKind::forward_slash:
-		*precedence           = 2;
-		*is_right_associative = false;
+		operator_info->type       = OperatorType::binary_left_associative;
+		operator_info->precedence = 3;
 		return true;
 
 		case SymbolKind::plus:
 		case SymbolKind::minus:
-		*precedence           = 1;
-		*is_right_associative = false;
+		operator_info->type       = OperatorType::binary_left_associative;
+		operator_info->precedence = 2;
 		return true;
 
 		case SymbolKind::equal:
-		*precedence           = 0;
-		*is_right_associative = false;
+		operator_info->type       = OperatorType::binary_left_associative;
+		operator_info->precedence = 1;
+		return true;
+
+		case SymbolKind::assert:
+		operator_info->type       = OperatorType::prefix;
+		operator_info->precedence = 0;
 		return true;
 	}
 
@@ -336,23 +357,22 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 	parenthetical_application_token.kind        = TokenKind::symbol;
 	parenthetical_application_token.string      = STRLIT("()");
 	parenthetical_application_token.symbol.kind = SymbolKind::parenthetical_application;
-	i32    parenthetical_application_precedence;
-	bool32 parenthetical_application_is_right_associative;
-	bool32 is_parenthetical_application_operator = get_operator_info(&parenthetical_application_precedence, &parenthetical_application_is_right_associative, SymbolKind::parenthetical_application);
+	OperatorInfo parenthetical_application_info;
+	bool32 is_parenthetical_application_operator = get_operator_info(&parenthetical_application_info, SymbolKind::parenthetical_application);
 	ASSERT(is_parenthetical_application_operator);
 	Token multiplication_token;
 	multiplication_token.kind        = TokenKind::symbol;
 	multiplication_token.string      = STRLIT("*");
 	multiplication_token.symbol.kind = SymbolKind::asterisk;
-	i32    multiplication_precedence;
-	bool32 multiplication_is_right_associative;
-	bool32 is_multiplication_operator = get_operator_info(&multiplication_precedence, &multiplication_is_right_associative, SymbolKind::asterisk);
+	OperatorInfo multiplication_info;
+	bool32 is_multiplication_operator = get_operator_info(&multiplication_info, SymbolKind::asterisk);
 	ASSERT(is_multiplication_operator);
 
 	SyntaxTree* current_tree;
 
 	{
-		Token token = peek_token(*tokenizer);
+		OperatorInfo operator_info;
+		Token        token = peek_token(*tokenizer);
 
 		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start)
 		{
@@ -366,7 +386,14 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::minus)
 		{
 			eat_token(tokenizer);
-			current_tree = init_single_syntax_tree(allocator, token, 0, eat_syntax_tree(tokenizer, allocator, multiplication_precedence + (multiplication_is_right_associative ? 0 : 1)));
+			current_tree = init_single_syntax_tree(allocator, token, 0, eat_syntax_tree(tokenizer, allocator, multiplication_info.precedence + (multiplication_info.type == OperatorType::binary_right_associative ? 0 : 1)));
+			ASSERT(current_tree->right);
+		}
+		else if (token.kind == TokenKind::symbol && get_operator_info(&operator_info, token.symbol.kind) && operator_info.type == OperatorType::prefix && operator_info.precedence >= min_precedence)
+		{
+			eat_token(tokenizer);
+			current_tree = init_single_syntax_tree(allocator, token, 0, eat_syntax_tree(tokenizer, allocator, operator_info.precedence + 1));
+			ASSERT(current_tree->right);
 		}
 		else if (token.kind == TokenKind::number || token.kind == TokenKind::identifier)
 		{
@@ -381,23 +408,38 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 
 	while (true)
 	{
-		Token  token = peek_token(*tokenizer);
-		i32    operator_precedence;
-		bool32 operator_is_right_associative;
-		if (token.kind == TokenKind::symbol && get_operator_info(&operator_precedence, &operator_is_right_associative, token.symbol.kind) && operator_precedence >= min_precedence)
+		Token        token = peek_token(*tokenizer);
+		OperatorInfo operator_info;
+		if (token.kind == TokenKind::symbol && get_operator_info(&operator_info, token.symbol.kind) && operator_info.precedence >= min_precedence)
 		{
 			eat_token(tokenizer);
-			if (token.symbol.kind == SymbolKind::exclamation_point)
+
+			switch (operator_info.type)
 			{
-				current_tree = init_single_syntax_tree(allocator, token, current_tree, 0);
-			}
-			else
-			{
-				current_tree = init_single_syntax_tree(allocator, token, current_tree, eat_syntax_tree(tokenizer, allocator, operator_precedence + (operator_is_right_associative ? 0 : 1)));
-				ASSERT(current_tree->right);
+				case OperatorType::binary_left_associative:
+				{
+					current_tree = init_single_syntax_tree(allocator, token, current_tree, eat_syntax_tree(tokenizer, allocator, operator_info.precedence + 1));
+					ASSERT(current_tree->right);
+				} break;
+
+				case OperatorType::binary_right_associative:
+				{
+					current_tree = init_single_syntax_tree(allocator, token, current_tree, eat_syntax_tree(tokenizer, allocator, operator_info.precedence));
+					ASSERT(current_tree->right);
+				} break;
+
+				case OperatorType::postfix:
+				{
+					current_tree = init_single_syntax_tree(allocator, token, current_tree, 0);
+				} break;
+
+				case OperatorType::prefix:
+				{
+					ASSERT(false); // Prefix operator encountered after atom.
+				} break;
 			}
 		}
-		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start && parenthetical_application_precedence >= min_precedence)
+		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start && parenthetical_application_info.precedence >= min_precedence)
 		{ // @TODO@ This is assuming all parenthetical applications are multiplications.
 			eat_token(tokenizer);
 			SyntaxTree* right_hand_side = eat_syntax_tree(tokenizer, allocator, 0);
@@ -408,10 +450,10 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 		else if
 		(
 			(token.kind == TokenKind::number && (current_tree->token.kind == TokenKind::identifier || current_tree->token.kind == TokenKind::symbol && current_tree->token.symbol.kind == SymbolKind::parenthetical_application)) ||
-			token.kind == TokenKind::identifier && parenthetical_application_precedence >= min_precedence
+			token.kind == TokenKind::identifier && parenthetical_application_info.precedence >= min_precedence
 		)
 		{
-			current_tree = init_single_syntax_tree(allocator, multiplication_token, current_tree, eat_syntax_tree(tokenizer, allocator, multiplication_precedence + (multiplication_is_right_associative ? 0 : 1)));
+			current_tree = init_single_syntax_tree(allocator, multiplication_token, current_tree, eat_syntax_tree(tokenizer, allocator, multiplication_info.precedence + (multiplication_info.type == OperatorType::binary_right_associative ? 0 : 1)));
 		}
 		else
 		{
@@ -519,6 +561,13 @@ internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
 					{
 						DEBUG_print_serialized_syntax_tree(tree->left);
 						DEBUG_printf("/");
+						DEBUG_print_serialized_syntax_tree(tree->right);
+					} break;
+
+					case SymbolKind::caret:
+					{
+						DEBUG_print_serialized_syntax_tree(tree->left);
+						DEBUG_printf("^");
 						DEBUG_print_serialized_syntax_tree(tree->right);
 					} break;
 
@@ -737,7 +786,7 @@ int main(void)
 
 	Ledger ledger = {};
 
-	SyntaxTree* statement_buffer[16];
+	SyntaxTree* statement_buffer[32];
 	i32         statement_count = 0;
 	DEFER
 	{
@@ -792,13 +841,45 @@ int main(void)
 		if ((*it)->token.kind == TokenKind::symbol && (*it)->token.symbol.kind == SymbolKind::equal)
 		{
 			ASSERT((*it)->left->token.kind == TokenKind::identifier);
+			DEBUG_printf("%f :: ", evaluate_identifier((*it)->left->token.string, &ledger));
 			DEBUG_print_serialized_syntax_tree(*it);
-			DEBUG_printf("\n:: %f\n", evaluate_identifier((*it)->left->token.string, &ledger));
+			DEBUG_printf("\n");
+		}
+		else if ((*it)->token.kind == TokenKind::symbol && (*it)->token.symbol.kind == SymbolKind::assert)
+		{
+			ASSERT(!(*it)->left);
+			ASSERT((*it)->right->token.kind == TokenKind::number);
+			ASSERT(!(*it)->right->left);
+			ASSERT(!(*it)->right->right);
+			ASSERT(it_index > 0);
+
+			f32 expectant_value = parse_number((*it)->right->token.string);
+			f32 resulting_value;
+			// @TODO@ Statement types.
+			if (statement_buffer[it_index - 1]->token.kind == TokenKind::symbol && statement_buffer[it_index - 1]->token.symbol.kind == SymbolKind::equal)
+			{
+				resulting_value = evaluate_expression(statement_buffer[it_index - 1]->left, &ledger);
+			}
+			else
+			{
+				resulting_value = evaluate_expression(statement_buffer[it_index - 1], &ledger);
+			}
+
+			if (fabsf(expectant_value - resulting_value) <= 0.00001f)
+			{
+				DEBUG_printf("Passed assertion :: %f\n\n", expectant_value);
+			}
+			else
+			{
+				DEBUG_printf("Failed assertion :: %f :: Resultant :: %f\n\n", expectant_value, resulting_value);
+				ASSERT(false);
+			}
 		}
 		else
 		{
+			DEBUG_printf("%f :: ", evaluate_expression(*it, &ledger));
 			DEBUG_print_serialized_syntax_tree(*it);
-			DEBUG_printf("\n:: %f\n", evaluate_expression(*it, &ledger));
+			DEBUG_printf("\n");
 		}
 	}
 
