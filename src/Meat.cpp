@@ -73,25 +73,51 @@ struct SyntaxTreeAllocator
 	SyntaxTree* available_syntax_tree;
 };
 
-enum struct DeclarationStatus : u8
+enum struct VariableDeclarationStatus : u8
 {
 	yet_calculated,
 	currently_calculating,
 	cached
 };
 
-struct Declaration
+enum struct StatementType : u8
 {
-	String            string;
-	SyntaxTree*       definition;
-	DeclarationStatus status;
-	f32               cached_evaluation;
+	null,
+	assertion,
+	expression,
+	variable_declaration,
+	function_declaration
+};
+
+struct Statement
+{
+	SyntaxTree*   tree;
+	StatementType type;
+	union
+	{
+		struct
+		{
+			Statement* corresponding_statement;
+		} assertion;
+
+		struct
+		{
+			bool32 is_cached;
+			f32    cached_evaluation;
+		} expression;
+
+		struct
+		{
+			VariableDeclarationStatus status;
+			f32                       cached_evaluation;
+		} variable_declaration;
+	};
 };
 
 struct Ledger
 {
-	i32         declaration_count;
-	Declaration declaration_buffer[64];
+	i32       statement_count;
+	Statement statement_buffer[64];
 };
 
 internal bool32 string_eq(String a, String b)
@@ -630,129 +656,208 @@ internal bool32 DEBUG_syntax_tree_eq(SyntaxTree* a, SyntaxTree* b)
 }
 #endif
 
-internal f32 evaluate_identifier(String identifier_name, Ledger* ledger);
-internal f32 evaluate_expression(SyntaxTree* tree, Ledger* ledger)
+internal bool32 is_token_symbol(Token token, SymbolKind kind)
 {
-	ASSERT(tree);
+	return token.kind == TokenKind::symbol && token.symbol.kind == kind;
+}
 
-	switch (tree->token.kind)
-	{
-		case TokenKind::symbol:
+internal void evaluate_statement(Statement* statement, Ledger* ledger)
+{
+	lambda evaluate_expression =
+		[&](SyntaxTree* tree)
 		{
-			switch (tree->token.symbol.kind)
+			Statement exp = {};
+			exp.tree = tree;
+			exp.type = StatementType::expression;
+			evaluate_statement(&exp, ledger);
+			ASSERT(exp.expression.is_cached);
+			return exp.expression.cached_evaluation;
+		};
+
+	switch (statement->type)
+	{
+		case StatementType::assertion:
+		{
+			evaluate_statement(statement->assertion.corresponding_statement, ledger);
+			f32 resultant_value = NAN;
+			f32 expectant_value = parse_number(statement->tree->right->token.string);
+
+			switch (statement->assertion.corresponding_statement->type)
 			{
-				case SymbolKind::plus:
+				case StatementType::expression:
 				{
-					return evaluate_expression(tree->left, ledger) + evaluate_expression(tree->right, ledger);
+					ASSERT(statement->assertion.corresponding_statement->expression.is_cached);
+					resultant_value = statement->assertion.corresponding_statement->expression.cached_evaluation;
 				} break;
 
-				case SymbolKind::minus:
+				case StatementType::variable_declaration:
 				{
-					if (tree->left)
-					{
-						return evaluate_expression(tree->left, ledger) - evaluate_expression(tree->right, ledger);
-					}
-					else
-					{
-						return -evaluate_expression(tree->right, ledger);
-					}
-				} break;
-
-				case SymbolKind::asterisk:
-				{
-					return evaluate_expression(tree->left, ledger) * evaluate_expression(tree->right, ledger);
-				} break;
-
-				case SymbolKind::forward_slash:
-				{
-					return evaluate_expression(tree->left, ledger) / evaluate_expression(tree->right, ledger);
-				} break;
-
-				case SymbolKind::caret:
-				{
-					return powf(evaluate_expression(tree->left, ledger), evaluate_expression(tree->right, ledger));
-				} break;
-
-				case SymbolKind::exclamation_point:
-				{
-					ASSERT(!tree->right);
-					return static_cast<f32>(tgamma(evaluate_expression(tree->left, ledger) + 1.0));
-				} break;
-
-				case SymbolKind::parenthetical_application:
-				{
-					if (tree->left)
-					{ // @TODO@ This is assuming all parenthetical applications are multiplications.
-						return evaluate_expression(tree->left, ledger) * evaluate_expression(tree->right, ledger);
-					}
-					else
-					{
-						return evaluate_expression(tree->right, ledger);
-					}
+					ASSERT(statement->assertion.corresponding_statement->variable_declaration.status == VariableDeclarationStatus::cached);
+					resultant_value = statement->assertion.corresponding_statement->variable_declaration.cached_evaluation;
 				} break;
 
 				default:
 				{
-					ASSERT(false); // Unknown symbol.
-					return 0.0f;
+					ASSERT(false); // Unknown assertion case.
 				} break;
+			}
+
+			if (fabsf(resultant_value - expectant_value) < 0.000001f)
+			{
+				DEBUG_printf("Passed assertion :: %f :: ", expectant_value);
+				DEBUG_print_serialized_syntax_tree(statement->assertion.corresponding_statement->tree);
+				DEBUG_printf("\n");
+			}
+			else
+			{
+				DEBUG_printf("Failed assertion :: %f :: resultant value :: %f :: ", expectant_value, resultant_value);
+				DEBUG_print_serialized_syntax_tree(statement->assertion.corresponding_statement->tree);
+				DEBUG_printf("\n");
+				ASSERT(false); // Failed meat assertion.
 			}
 		} break;
 
-		case TokenKind::number:
+		case StatementType::expression:
 		{
-			ASSERT(!tree->left);
-			ASSERT(!tree->right);
-			return parse_number(tree->token.string);
+			if (!statement->expression.is_cached)
+			{
+				switch (statement->tree->token.kind)
+				{
+					case TokenKind::symbol:
+					{
+						switch (statement->tree->token.symbol.kind)
+						{
+							case SymbolKind::plus:
+							{
+								statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) + evaluate_expression(statement->tree->right);
+								statement->expression.is_cached         = true;
+							} break;
+
+							case SymbolKind::minus:
+							{
+								if (statement->tree->left)
+								{
+									statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) - evaluate_expression(statement->tree->right);
+								}
+								else
+								{
+									statement->expression.cached_evaluation = -evaluate_expression(statement->tree->right);
+								}
+								statement->expression.is_cached = true;
+							} break;
+
+							case SymbolKind::asterisk:
+							{
+								statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) * evaluate_expression(statement->tree->right);
+								statement->expression.is_cached         = true;
+							} break;
+
+							case SymbolKind::forward_slash:
+							{
+								statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) / evaluate_expression(statement->tree->right);
+								statement->expression.is_cached         = true;
+							} break;
+
+							case SymbolKind::caret:
+							{
+								statement->expression.cached_evaluation = powf(evaluate_expression(statement->tree->left), evaluate_expression(statement->tree->right));
+								statement->expression.is_cached         = true;
+							} break;
+
+							case SymbolKind::exclamation_point:
+							{
+								ASSERT(!statement->tree->right);
+								statement->expression.cached_evaluation = static_cast<f32>(tgamma(evaluate_expression(statement->tree->left) + 1.0));
+								statement->expression.is_cached         = true;
+							} break;
+
+							case SymbolKind::parenthetical_application:
+							{
+								if (statement->tree->left)
+								{ // @TODO@ This is assuming all parenthetical applications are multiplications.
+									statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) * evaluate_expression(statement->tree->right);
+								}
+								else
+								{
+									statement->expression.cached_evaluation = evaluate_expression(statement->tree->right);
+								}
+								statement->expression.is_cached = true;
+							} break;
+
+							default:
+							{
+								ASSERT(false); // Unknown symbol.
+							} break;
+						}
+					} break;
+
+					case TokenKind::number:
+					{
+						ASSERT(!statement->tree->left);
+						ASSERT(!statement->tree->right);
+						statement->expression.cached_evaluation = parse_number(statement->tree->token.string);
+						statement->expression.is_cached         = true;
+					} break;
+
+					case TokenKind::identifier:
+					{
+						ASSERT(!statement->tree->left);
+						ASSERT(!statement->tree->right);
+
+						FOR_ELEMS(it, ledger->statement_buffer, ledger->statement_count)
+						{
+							if (it->type == StatementType::variable_declaration && string_eq(it->tree->left->token.string, statement->tree->token.string))
+							{
+								evaluate_statement(it, ledger);
+								statement->expression.cached_evaluation = it->variable_declaration.cached_evaluation;
+								statement->expression.is_cached         = true;
+								return;
+							}
+						}
+
+						ASSERT(false); // Couldn't find declaration.
+					} break;
+
+					default:
+					{
+						ASSERT(false); // Unknown token.
+					} break;
+				}
+			}
 		} break;
 
-		case TokenKind::identifier:
+		case StatementType::variable_declaration:
 		{
-			ASSERT(!tree->left);
-			ASSERT(!tree->right);
-			return evaluate_identifier(tree->token.string, ledger);
+			switch (statement->variable_declaration.status)
+			{
+				case VariableDeclarationStatus::yet_calculated:
+				{
+					statement->variable_declaration.status            = VariableDeclarationStatus::currently_calculating;
+					statement->variable_declaration.cached_evaluation = evaluate_expression(statement->tree->right);
+					statement->variable_declaration.status            = VariableDeclarationStatus::cached;
+				} break;
+
+				case VariableDeclarationStatus::currently_calculating:
+				{
+					ASSERT(false); // Circlar definition.
+				} break;
+
+				case VariableDeclarationStatus::cached:
+				{
+				} break;
+
+				default:
+				{
+					ASSERT(false); // Unknown variable declaration status.
+				} break;
+			};
 		} break;
 
 		default:
 		{
-			ASSERT(false); // Unknown token.
-			return 0.0f;
+			ASSERT(false); // Unknown statement type.
 		} break;
 	}
-}
-
-internal f32 evaluate_identifier(String identifier_name, Ledger* ledger)
-{
-	FOR_ELEMS(it, ledger->declaration_buffer, ledger->declaration_count)
-	{
-		if (string_eq(it->string, identifier_name))
-		{
-			switch (it->status)
-			{
-				case DeclarationStatus::yet_calculated:
-				{
-					it->status            = DeclarationStatus::currently_calculating;
-					it->cached_evaluation = evaluate_expression(it->definition, ledger);
-					it->status            = DeclarationStatus::cached;
-					return it->cached_evaluation;
-				} break;
-
-				case DeclarationStatus::currently_calculating:
-				{
-					ASSERT(false); // Circular definition.
-					return 0.0f;
-				} break;
-
-				case DeclarationStatus::cached:
-				{
-					return it->cached_evaluation;
-				} break;
-			}
-		}
-	}
-
-	ASSERT(false); // Couldn't find declaration of identifier.
-	return 0.0f;
 }
 
 int main(void)
@@ -785,14 +890,11 @@ int main(void)
 	syntax_tree_allocator.available_syntax_tree[EXPRESSION_TREE_COUNT - 1].left = 0;
 
 	Ledger ledger = {};
-
-	SyntaxTree* statement_buffer[32];
-	i32         statement_count = 0;
 	DEFER
 	{
-		FOR_ELEMS(it, statement_buffer, statement_count)
+		FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count)
 		{
-			deinit_entire_syntax_tree(&syntax_tree_allocator, *it);
+			deinit_entire_syntax_tree(&syntax_tree_allocator, it->tree);
 		}
 	};
 
@@ -802,84 +904,78 @@ int main(void)
 
 	while (peek_token(tokenizer).kind != TokenKind::null)
 	{
-		ASSERT(IN_RANGE(statement_count, 0, ARRAY_CAPACITY(statement_buffer)));
-		statement_buffer[statement_count] = eat_syntax_tree(&tokenizer, &syntax_tree_allocator);
+		ASSERT(IN_RANGE(ledger.statement_count, 0, ARRAY_CAPACITY(ledger.statement_buffer)));
 
-		if (statement_buffer[statement_count])
+		aliasing statement = ledger.statement_buffer[ledger.statement_count];
+		ledger.statement_count += 1;
+
+		statement = {};
+		statement.tree = eat_syntax_tree(&tokenizer, &syntax_tree_allocator);
+		ASSERT(statement.tree);
+
+		if (is_token_symbol(statement.tree->token, SymbolKind::assert))
 		{
-			statement_count += 1;
-			DEBUG_print_syntax_tree(statement_buffer[statement_count - 1]);
-			DEBUG_printf("===================\n");
+			ASSERT(IN_RANGE(ledger.statement_count - 2, 0, ledger.statement_count));
+			statement.type = StatementType::assertion;
+			statement.assertion.corresponding_statement = &ledger.statement_buffer[ledger.statement_count - 2];
 		}
-
-		Token terminating_token = eat_token(&tokenizer);
-		ASSERT(terminating_token.kind == TokenKind::symbol && terminating_token.symbol.kind == SymbolKind::semicolon);
-	}
-
-	FOR_ELEMS(it, statement_buffer, statement_count)
-	{
-		if ((*it)->token.kind == TokenKind::symbol && (*it)->token.symbol.kind == SymbolKind::equal)
+		else if (is_token_symbol(statement.tree->token, SymbolKind::equal))
 		{
-			ASSERT((*it)->left->token.kind == TokenKind::identifier);
-			ASSERT(!(*it)->left->left);
-			ASSERT(!(*it)->left->right);
-			ASSERT(IN_RANGE(ledger.declaration_count, 0, ARRAY_CAPACITY(ledger.declaration_buffer)));
-			FOR_ELEMS(declaration, ledger.declaration_buffer, ledger.declaration_count)
+			// @TODO@ Assumes the declaration is of a variable.
+			// @TODO@ `x = x` is not noticed as ill-formed.
+
+			ASSERT(statement.tree->left->token.kind == TokenKind::identifier);
+			ASSERT(!statement.tree->left->left);
+			ASSERT(!statement.tree->left->right);
+			FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count - 1)
 			{
-				ASSERT(!string_eq(declaration->string, (*it)->left->token.string));
+				ASSERT(it->type != StatementType::variable_declaration || !string_eq(it->tree->left->token.string, statement.tree->left->token.string));
 			}
 
-			ledger.declaration_buffer[ledger.declaration_count]            = {};
-			ledger.declaration_buffer[ledger.declaration_count].string     = (*it)->left->token.string;
-			ledger.declaration_buffer[ledger.declaration_count].definition = (*it)->right;
-			ledger.declaration_count += 1;
-		}
-	}
-
-	FOR_ELEMS(it, statement_buffer, statement_count)
-	{
-		if ((*it)->token.kind == TokenKind::symbol && (*it)->token.symbol.kind == SymbolKind::equal)
-		{
-			ASSERT((*it)->left->token.kind == TokenKind::identifier);
-			DEBUG_printf("%f :: ", evaluate_identifier((*it)->left->token.string, &ledger));
-			DEBUG_print_serialized_syntax_tree(*it);
-			DEBUG_printf("\n");
-		}
-		else if ((*it)->token.kind == TokenKind::symbol && (*it)->token.symbol.kind == SymbolKind::assert)
-		{
-			ASSERT(!(*it)->left);
-			ASSERT((*it)->right->token.kind == TokenKind::number);
-			ASSERT(!(*it)->right->left);
-			ASSERT(!(*it)->right->right);
-			ASSERT(it_index > 0);
-
-			f32 expectant_value = parse_number((*it)->right->token.string);
-			f32 resulting_value;
-			// @TODO@ Statement types.
-			if (statement_buffer[it_index - 1]->token.kind == TokenKind::symbol && statement_buffer[it_index - 1]->token.symbol.kind == SymbolKind::equal)
-			{
-				resulting_value = evaluate_expression(statement_buffer[it_index - 1]->left, &ledger);
-			}
-			else
-			{
-				resulting_value = evaluate_expression(statement_buffer[it_index - 1], &ledger);
-			}
-
-			if (fabsf(expectant_value - resulting_value) <= 0.00001f)
-			{
-				DEBUG_printf("Passed assertion :: %f\n\n", expectant_value);
-			}
-			else
-			{
-				DEBUG_printf("Failed assertion :: %f :: Resultant :: %f\n\n", expectant_value, resulting_value);
-				ASSERT(false);
-			}
+			statement.type = StatementType::variable_declaration;
 		}
 		else
 		{
-			DEBUG_printf("%f :: ", evaluate_expression(*it, &ledger));
-			DEBUG_print_serialized_syntax_tree(*it);
-			DEBUG_printf("\n");
+			statement.type = StatementType::expression;
+		}
+
+		Token terminating_token = eat_token(&tokenizer);
+		ASSERT(is_token_symbol(terminating_token, SymbolKind::semicolon));
+
+		DEBUG_print_syntax_tree(statement.tree);
+		DEBUG_printf("===================\n");
+	}
+
+	FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count)
+	{
+		evaluate_statement(it, &ledger);
+
+		switch (it->type)
+		{
+			case StatementType::assertion:
+			{
+			} break;
+
+			case StatementType::variable_declaration:
+			{
+				ASSERT(it->variable_declaration.status == VariableDeclarationStatus::cached);
+				DEBUG_printf("%f :: ", it->variable_declaration.cached_evaluation);
+				DEBUG_print_serialized_syntax_tree(it->tree);
+				DEBUG_printf("\n");
+			} break;
+
+			case StatementType::expression:
+			{
+				ASSERT(it->expression.is_cached);
+				DEBUG_printf("%f :: ", it->expression.cached_evaluation);
+				DEBUG_print_serialized_syntax_tree(it->tree);
+				DEBUG_printf("\n");
+			} break;
+
+			default:
+			{
+				ASSERT(false); // Unknown statement type.
+			} break;
 		}
 	}
 
