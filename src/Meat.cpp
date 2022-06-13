@@ -26,6 +26,7 @@ enum struct SymbolKind : u8
 	caret,
 	exclamation_point,
 	equal,
+	comma,
 	parenthesis_start,
 	parenthesis_end,
 
@@ -118,6 +119,13 @@ struct Ledger
 {
 	i32       statement_count;
 	Statement statement_buffer[64];
+};
+
+struct FunctionArgumentNode
+{
+	FunctionArgumentNode* next_node;
+	String                string;
+	f32                   value;
 };
 
 internal bool32 string_eq(String a, String b)
@@ -254,6 +262,7 @@ internal Token eat_token(Tokenizer* tokenizer)
 					{ "^"     , SymbolKind::caret             },
 					{ "!"     , SymbolKind::exclamation_point },
 					{ "="     , SymbolKind::equal             },
+					{ ","     , SymbolKind::comma             },
 					{ "("     , SymbolKind::parenthesis_start },
 					{ ")"     , SymbolKind::parenthesis_end   },
 					{ "ASSERT", SymbolKind::assert            }
@@ -336,28 +345,33 @@ internal bool32 get_operator_info(OperatorInfo* operator_info, SymbolKind kind)
 	{
 		case SymbolKind::exclamation_point:
 		operator_info->type       = OperatorType::postfix;
-		operator_info->precedence = 6;
+		operator_info->precedence = 7;
 		return true;
 
 		case SymbolKind::caret:
 		operator_info->type       = OperatorType::binary_right_associative;
-		operator_info->precedence = 5;
+		operator_info->precedence = 6;
 		return true;
 
 		case SymbolKind::parenthetical_application:
 		operator_info->type       = OperatorType::binary_left_associative;
-		operator_info->precedence = 4;
+		operator_info->precedence = 5;
 		return true;
 
 		case SymbolKind::asterisk:
 		case SymbolKind::forward_slash:
 		operator_info->type       = OperatorType::binary_left_associative;
-		operator_info->precedence = 3;
+		operator_info->precedence = 4;
 		return true;
 
 		case SymbolKind::plus:
 		case SymbolKind::minus:
 		operator_info->type       = OperatorType::binary_left_associative;
+		operator_info->precedence = 3;
+		return true;
+
+		case SymbolKind::comma:
+		operator_info->type       = OperatorType::binary_right_associative;
 		operator_info->precedence = 2;
 		return true;
 
@@ -466,12 +480,12 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 			}
 		}
 		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start && parenthetical_application_info.precedence >= min_precedence)
-		{ // @TODO@ This is assuming all parenthetical applications are multiplications.
+		{
 			eat_token(tokenizer);
 			SyntaxTree* right_hand_side = eat_syntax_tree(tokenizer, allocator, 0);
 			token = eat_token(tokenizer);
 			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
-			current_tree = init_single_syntax_tree(allocator, parenthetical_application_token, 0, init_single_syntax_tree(allocator, parenthetical_application_token, current_tree, right_hand_side));
+			current_tree = init_single_syntax_tree(allocator, parenthetical_application_token, current_tree, right_hand_side);
 		}
 		else if
 		(
@@ -507,22 +521,22 @@ internal void DEBUG_print_syntax_tree(SyntaxTree* tree, i32 depth = 0, u64 path 
 	{
 		if (!tree->left && !tree->right)
 		{
-			DEBUG_printf("Leaf : ");
+			printf("Leaf : ");
 			FOR_RANGE(i, depth)
 			{
-				DEBUG_printf("%llu", (path >> i) & 0b1);
+				printf("%llu", (path >> i) & 0b1);
 			}
 
-			DEBUG_printf(" : `%.*s`\n", PASS_STRING(tree->token.string));
+			printf(" : `%.*s`\n", PASS_STRING(tree->token.string));
 		}
 		else
 		{
-			DEBUG_printf("Branch : ");
+			printf("Branch : ");
 			FOR_RANGE(i, depth)
 			{
-				DEBUG_printf("%llu", (path >> i) & 0b1);
+				printf("%llu", (path >> i) & 0b1);
 			}
-			DEBUG_printf(" : `%.*s`\n", PASS_STRING(tree->token.string));
+			printf(" : `%.*s`\n", PASS_STRING(tree->token.string));
 
 			if (tree->left)
 			{
@@ -549,7 +563,7 @@ internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
 					case SymbolKind::plus:
 					{
 						DEBUG_print_serialized_syntax_tree(tree->left);
-						DEBUG_printf(" + ");
+						printf(" + ");
 						DEBUG_print_serialized_syntax_tree(tree->right);
 					} break;
 
@@ -558,12 +572,12 @@ internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
 						if (tree->left)
 						{
 							DEBUG_print_serialized_syntax_tree(tree->left);
-							DEBUG_printf(" - ");
+							printf(" - ");
 							DEBUG_print_serialized_syntax_tree(tree->right);
 						}
 						else
 						{
-							DEBUG_printf("-");
+							printf("-");
 							DEBUG_print_serialized_syntax_tree(tree->right);
 						}
 					} break;
@@ -578,7 +592,7 @@ internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
 						else
 						{
 							DEBUG_print_serialized_syntax_tree(tree->left);
-							DEBUG_printf(" * ");
+							printf(" * ");
 							DEBUG_print_serialized_syntax_tree(tree->right);
 						}
 					} break;
@@ -586,35 +600,42 @@ internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
 					case SymbolKind::forward_slash:
 					{
 						DEBUG_print_serialized_syntax_tree(tree->left);
-						DEBUG_printf("/");
+						printf("/");
 						DEBUG_print_serialized_syntax_tree(tree->right);
 					} break;
 
 					case SymbolKind::caret:
 					{
 						DEBUG_print_serialized_syntax_tree(tree->left);
-						DEBUG_printf("^");
+						printf("^");
 						DEBUG_print_serialized_syntax_tree(tree->right);
 					} break;
 
 					case SymbolKind::exclamation_point:
 					{
 						DEBUG_print_serialized_syntax_tree(tree->left);
-						DEBUG_printf("!");
+						printf("!");
 					} break;
 
 					case SymbolKind::parenthetical_application:
 					{
 						DEBUG_print_serialized_syntax_tree(tree->left);
-						DEBUG_printf("(");
+						printf("(");
 						DEBUG_print_serialized_syntax_tree(tree->right);
-						DEBUG_printf(")");
+						printf(")");
 					} break;
 
 					case SymbolKind::equal:
 					{
 						DEBUG_print_serialized_syntax_tree(tree->left);
-						DEBUG_printf(" = ");
+						printf(" = ");
+						DEBUG_print_serialized_syntax_tree(tree->right);
+					} break;
+
+					case SymbolKind::comma:
+					{
+						DEBUG_print_serialized_syntax_tree(tree->left);
+						printf(", ");
 						DEBUG_print_serialized_syntax_tree(tree->right);
 					} break;
 				}
@@ -623,7 +644,7 @@ internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
 			case TokenKind::number:
 			case TokenKind::identifier:
 			{
-				DEBUG_printf("%.*s", PASS_STRING(tree->token.string));
+				printf("%.*s", PASS_STRING(tree->token.string));
 			} break;
 		}
 	}
@@ -661,7 +682,7 @@ internal bool32 is_token_symbol(Token token, SymbolKind kind)
 	return token.kind == TokenKind::symbol && token.symbol.kind == kind;
 }
 
-internal void evaluate_statement(Statement* statement, Ledger* ledger)
+internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionArgumentNode* function_argument_node = 0)
 {
 	lambda evaluate_expression =
 		[&](SyntaxTree* tree)
@@ -669,7 +690,7 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger)
 			Statement exp = {};
 			exp.tree = tree;
 			exp.type = StatementType::expression;
-			evaluate_statement(&exp, ledger);
+			evaluate_statement(&exp, ledger, function_argument_node);
 			ASSERT(exp.expression.is_cached);
 			return exp.expression.cached_evaluation;
 		};
@@ -704,15 +725,15 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger)
 
 			if (fabsf(resultant_value - expectant_value) < 0.000001f)
 			{
-				DEBUG_printf("Passed assertion :: %f :: ", expectant_value);
+				printf("Passed assertion :: %f :: ", expectant_value);
 				DEBUG_print_serialized_syntax_tree(statement->assertion.corresponding_statement->tree);
-				DEBUG_printf("\n");
+				printf("\n");
 			}
 			else
 			{
-				DEBUG_printf("Failed assertion :: %f :: resultant value :: %f :: ", expectant_value, resultant_value);
+				printf("Failed assertion :: %f :: resultant value :: %f :: ", expectant_value, resultant_value);
 				DEBUG_print_serialized_syntax_tree(statement->assertion.corresponding_statement->tree);
-				DEBUG_printf("\n");
+				printf("\n");
 				ASSERT(false); // Failed meat assertion.
 			}
 		} break;
@@ -774,7 +795,73 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger)
 							case SymbolKind::parenthetical_application:
 							{
 								if (statement->tree->left)
-								{ // @TODO@ This is assuming all parenthetical applications are multiplications.
+								{
+									if (statement->tree->left->token.kind == TokenKind::identifier)
+									{
+										FOR_ELEMS(it, ledger->statement_buffer, ledger->statement_count)
+										{
+											if (it->type == StatementType::function_declaration && string_eq(it->tree->left->left->token.string, statement->tree->left->token.string))
+											{
+												FunctionArgumentNode other_function_argument_node_buffer[64]; // @TEMP@
+												i32                  other_function_argument_node_count = 0;
+
+												FunctionArgumentNode*  other_function_argument_node     = 0;
+												FunctionArgumentNode** other_function_argument_node_nil = &other_function_argument_node;
+
+												for (SyntaxTree* application_tree = statement->tree->right, *definition_tree = it->tree->left->right; application_tree; application_tree = application_tree->right)
+												{
+													if (definition_tree && application_tree)
+													{
+														if (is_token_symbol(application_tree->token, SymbolKind::comma))
+														{
+															ASSERT(is_token_symbol(definition_tree->token, SymbolKind::comma));
+
+															ASSERT(IN_RANGE(other_function_argument_node_count, 0, ARRAY_CAPACITY(other_function_argument_node_buffer)));
+															FunctionArgumentNode* next_node = &other_function_argument_node_buffer[++other_function_argument_node_count];
+
+															next_node->next_node = 0;
+															next_node->string    = definition_tree->left->token.string;
+															next_node->value     = evaluate_expression(application_tree->left);
+
+															*other_function_argument_node_nil = next_node;
+															other_function_argument_node_nil  = &next_node->next_node;
+														}
+														else
+														{
+															ASSERT(!is_token_symbol(definition_tree->token, SymbolKind::comma));
+
+															ASSERT(IN_RANGE(other_function_argument_node_count, 0, ARRAY_CAPACITY(other_function_argument_node_buffer)));
+															FunctionArgumentNode* next_node = &other_function_argument_node_buffer[++other_function_argument_node_count];
+
+															next_node->next_node = 0;
+															next_node->string    = definition_tree->token.string;
+															next_node->value     = evaluate_expression(application_tree);
+
+															*other_function_argument_node_nil = next_node;
+															other_function_argument_node_nil  = &next_node->next_node;
+
+															break;
+														}
+														definition_tree = definition_tree->right;
+													}
+													else
+													{
+														ASSERT(false); // Function argument mismatch.
+													}
+												}
+
+												Statement exp = {};
+												exp.tree = it->tree->right;
+												exp.type = StatementType::expression;
+												evaluate_statement(&exp, ledger, other_function_argument_node);
+												ASSERT(exp.expression.is_cached);
+												statement->expression.cached_evaluation = exp.expression.cached_evaluation;
+												statement->expression.is_cached         = true;
+												return;
+											}
+										}
+									}
+
 									statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) * evaluate_expression(statement->tree->right);
 								}
 								else
@@ -803,6 +890,16 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger)
 					{
 						ASSERT(!statement->tree->left);
 						ASSERT(!statement->tree->right);
+
+						for (FunctionArgumentNode* node = function_argument_node; node; node = node->next_node)
+						{
+							if (string_eq(node->string, statement->tree->token.string))
+							{
+								statement->expression.cached_evaluation = node->value;
+								statement->expression.is_cached         = true;
+								return;
+							}
+						}
 
 						FOR_ELEMS(it, ledger->statement_buffer, ledger->statement_count)
 						{
@@ -853,6 +950,10 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger)
 			};
 		} break;
 
+		case StatementType::function_declaration:
+		{
+		} break;
+
 		default:
 		{
 			ASSERT(false); // Unknown statement type.
@@ -869,7 +970,7 @@ int main(void)
 	Tokenizer tokenizer = init_tokenizer_from_file(DATA_DIR "meat.meat");
 	DEFER { deinit_tokenizer_from_file(tokenizer); };
 
-	constexpr i32 EXPRESSION_TREE_COUNT = 256;
+	constexpr i32 EXPRESSION_TREE_COUNT = 512;
 	SyntaxTreeAllocator syntax_tree_allocator;
 	syntax_tree_allocator.memory                = reinterpret_cast<SyntaxTree*>(malloc(EXPRESSION_TREE_COUNT * sizeof(SyntaxTree)));
 	syntax_tree_allocator.available_syntax_tree = syntax_tree_allocator.memory;
@@ -921,18 +1022,33 @@ int main(void)
 		}
 		else if (is_token_symbol(statement.tree->token, SymbolKind::equal))
 		{
-			// @TODO@ Assumes the declaration is of a variable.
-			// @TODO@ `x = x` is not noticed as ill-formed.
-
-			ASSERT(statement.tree->left->token.kind == TokenKind::identifier);
-			ASSERT(!statement.tree->left->left);
-			ASSERT(!statement.tree->left->right);
-			FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count - 1)
+			if (is_token_symbol(statement.tree->left->token, SymbolKind::parenthetical_application))
 			{
-				ASSERT(it->type != StatementType::variable_declaration || !string_eq(it->tree->left->token.string, statement.tree->left->token.string));
-			}
+				ASSERT(statement.tree->left->left);
+				ASSERT(statement.tree->left->left->token.kind == TokenKind::identifier);
+				FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count - 1)
+				{
+					ASSERT(it->type != StatementType::variable_declaration || !string_eq(it->tree->left->token.string, statement.tree->left->left->token.string));
+					ASSERT(it->type != StatementType::function_declaration || !string_eq(it->tree->left->left->token.string, statement.tree->left->left->token.string));
+				}
 
-			statement.type = StatementType::variable_declaration;
+				statement.type = StatementType::function_declaration;
+			}
+			else
+			{
+				// @TODO@ `x = x` is not noticed as ill-formed.
+
+				ASSERT(statement.tree->left->token.kind == TokenKind::identifier);
+				ASSERT(!statement.tree->left->left);
+				ASSERT(!statement.tree->left->right);
+				FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count - 1)
+				{
+					ASSERT(it->type != StatementType::variable_declaration || !string_eq(it->tree->left->token.string, statement.tree->left->token.string));
+					ASSERT(it->type != StatementType::function_declaration || !string_eq(it->tree->left->left->token.string, statement.tree->left->token.string));
+				}
+
+				statement.type = StatementType::variable_declaration;
+			}
 		}
 		else
 		{
@@ -943,7 +1059,7 @@ int main(void)
 		ASSERT(is_token_symbol(terminating_token, SymbolKind::semicolon));
 
 		DEBUG_print_syntax_tree(statement.tree);
-		DEBUG_printf("===================\n");
+		printf("===================\n");
 	}
 
 	FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count)
@@ -959,17 +1075,21 @@ int main(void)
 			case StatementType::variable_declaration:
 			{
 				ASSERT(it->variable_declaration.status == VariableDeclarationStatus::cached);
-				DEBUG_printf("%f :: ", it->variable_declaration.cached_evaluation);
+				printf("%f :: ", it->variable_declaration.cached_evaluation);
 				DEBUG_print_serialized_syntax_tree(it->tree);
-				DEBUG_printf("\n");
+				printf("\n");
 			} break;
 
 			case StatementType::expression:
 			{
 				ASSERT(it->expression.is_cached);
-				DEBUG_printf("%f :: ", it->expression.cached_evaluation);
+				printf("%f :: ", it->expression.cached_evaluation);
 				DEBUG_print_serialized_syntax_tree(it->tree);
-				DEBUG_printf("\n");
+				printf("\n");
+			} break;
+
+			case StatementType::function_declaration:
+			{
 			} break;
 
 			default:
@@ -992,14 +1112,16 @@ int main(void)
 	//	{
 	//		if (token.kind == TokenKind::number)
 	//		{
-	//			DEBUG_printf("Token : `%.*s` : %f\n", PASS_STRING(token.string), parse_number(token.string));
+	//			printf("Token : `%.*s` : %f\n", PASS_STRING(token.string), parse_number(token.string));
 	//		}
 	//		else
 	//		{
-	//			DEBUG_printf("Token : `%.*s`\n", PASS_STRING(token.string));
+	//			printf("Token : `%.*s`\n", PASS_STRING(token.string));
 	//		}
 	//	}
 	//}
+
+	DEBUG_STDOUT_HALT();
 
 	return 0;
 }
