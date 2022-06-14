@@ -14,6 +14,9 @@ struct String
 	char* data;
 };
 
+internal constexpr bool32 operator==(String& a, String& b) { return a.size  == b.size  && memcmp(a.data , b.data , a.size ) == 0; }
+internal constexpr bool32 operator!=(String& a, String& b) { return !(a == b); }
+
 enum struct SymbolKind : u8
 {
 	null,
@@ -68,10 +71,11 @@ struct SyntaxTree
 	SyntaxTree* right;
 };
 
-struct SyntaxTreeAllocator
+struct FunctionArgumentNode
 {
-	SyntaxTree* memory;
-	SyntaxTree* available_syntax_tree;
+	FunctionArgumentNode* next_node;
+	String                name;
+	f32                   value;
 };
 
 enum struct VariableDeclarationStatus : u8
@@ -94,6 +98,7 @@ struct Statement
 {
 	SyntaxTree*   tree;
 	StatementType type;
+
 	union
 	{
 		struct
@@ -112,26 +117,24 @@ struct Statement
 			VariableDeclarationStatus status;
 			f32                       cached_evaluation;
 		} variable_declaration;
+
+		struct
+		{
+			FunctionArgumentNode* args;
+		} function_declaration;
 	};
 };
 
 struct Ledger
 {
-	i32       statement_count;
-	Statement statement_buffer[64];
+	MemoryArena*          arena;
+	i32                   allocated_syntax_tree_count;
+	SyntaxTree*           available_syntax_tree;
+	i32                   allocated_function_argument_node_count;
+	FunctionArgumentNode* available_function_argument_node;
+	i32                   statement_count;
+	Statement             statement_buffer[64];
 };
-
-struct FunctionArgumentNode
-{
-	FunctionArgumentNode* next_node;
-	String                string;
-	f32                   value;
-};
-
-internal bool32 string_eq(String a, String b)
-{
-	return a.size == b.size && memcmp(a.data, b.data, a.size) == 0;
-}
 
 // @TODO@ Handle non-existing files.
 internal Tokenizer init_tokenizer_from_file(strlit file_path)
@@ -158,32 +161,83 @@ internal void deinit_tokenizer_from_file(Tokenizer tokenizer)
 	free(tokenizer.stream.data);
 }
 
-internal SyntaxTree* init_single_syntax_tree(SyntaxTreeAllocator* allocator, Token token, SyntaxTree* left, SyntaxTree* right)
+internal SyntaxTree* init_single_syntax_tree(Ledger* ledger, Token token, SyntaxTree* left, SyntaxTree* right)
 {
-	ASSERT(allocator->available_syntax_tree);
-	SyntaxTree* allocation           = allocator->available_syntax_tree;
-	allocator->available_syntax_tree = allocator->available_syntax_tree->left;
+	ledger->allocated_syntax_tree_count += 1;
+	SyntaxTree* allocation;
+
+	if (ledger->available_syntax_tree)
+	{
+		allocation                       = ledger->available_syntax_tree;
+		ledger->available_syntax_tree = ledger->available_syntax_tree->left;
+	}
+	else
+	{
+		allocation = memory_arena_allocate<SyntaxTree>(ledger->arena);
+	}
+
+	*allocation       = {};
 	allocation->token = token;
 	allocation->left  = left;
 	allocation->right = right;
+
 	return allocation;
 }
 
-internal void deinit_entire_syntax_tree(SyntaxTreeAllocator* allocator, SyntaxTree* tree)
+internal void deinit_entire_syntax_tree(Ledger* ledger, SyntaxTree* tree)
 {
 	if (tree)
 	{
 		if (tree->left)
 		{
-			deinit_entire_syntax_tree(allocator, tree->left);
+			deinit_entire_syntax_tree(ledger, tree->left);
 		}
 		if (tree->right)
 		{
-			deinit_entire_syntax_tree(allocator, tree->right);
+			deinit_entire_syntax_tree(ledger, tree->right);
 		}
 
-		tree->left                       = allocator->available_syntax_tree;
-		allocator->available_syntax_tree = tree;
+		ledger->allocated_syntax_tree_count -= 1;
+		ASSERT(ledger->allocated_syntax_tree_count >= 0);
+
+		tree->left                    = ledger->available_syntax_tree;
+		ledger->available_syntax_tree = tree;
+	}
+}
+
+internal FunctionArgumentNode* init_function_argument_node(Ledger* ledger, String name, f32 value = 0.0f)
+{
+	ledger->allocated_function_argument_node_count += 1;
+	FunctionArgumentNode* allocation;
+
+	if (ledger->available_function_argument_node)
+	{
+		allocation                               = ledger->available_function_argument_node;
+		ledger->available_function_argument_node = ledger->available_function_argument_node->next_node;
+	}
+	else
+	{
+		allocation = memory_arena_allocate<FunctionArgumentNode>(ledger->arena);
+	}
+
+	*allocation       = {};
+	allocation->name  = name;
+	allocation->value = value;
+
+	return allocation;
+}
+
+internal void deinit_entire_function_argument_node(Ledger* ledger, FunctionArgumentNode* node)
+{
+	while (node)
+	{
+		ledger->allocated_function_argument_node_count -= 1;
+		ASSERT(ledger->allocated_function_argument_node_count >= 0);
+
+		FunctionArgumentNode* tail = node->next_node;
+		node->next_node                          = ledger->available_function_argument_node;
+		ledger->available_function_argument_node = node;
+		node                                     = tail;
 	}
 }
 
@@ -390,7 +444,7 @@ internal bool32 get_operator_info(OperatorInfo* operator_info, SymbolKind kind)
 }
 
 // @NOTE@ https://eli.thegreenplace.net/2012/08/02/parsing-expressions-by-precedence-climbing
-internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* allocator, i32 min_precedence = 0)
+internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 min_precedence = 0)
 {
 	// @TODO@ Clean up.
 	Token parenthetical_application_token;
@@ -417,28 +471,28 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start)
 		{
 			eat_token(tokenizer);
-			current_tree = eat_syntax_tree(tokenizer, allocator, 0);
+			current_tree = eat_syntax_tree(tokenizer, ledger, 0);
 			ASSERT(current_tree);
 			token = eat_token(tokenizer);
 			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
-			current_tree = init_single_syntax_tree(allocator, parenthetical_application_token, 0, current_tree);
+			current_tree = init_single_syntax_tree(ledger, parenthetical_application_token, 0, current_tree);
 		}
 		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::minus)
 		{
 			eat_token(tokenizer);
-			current_tree = init_single_syntax_tree(allocator, token, 0, eat_syntax_tree(tokenizer, allocator, multiplication_info.precedence + (multiplication_info.type == OperatorType::binary_right_associative ? 0 : 1)));
+			current_tree = init_single_syntax_tree(ledger, token, 0, eat_syntax_tree(tokenizer, ledger, multiplication_info.precedence + (multiplication_info.type == OperatorType::binary_right_associative ? 0 : 1)));
 			ASSERT(current_tree->right);
 		}
 		else if (token.kind == TokenKind::symbol && get_operator_info(&operator_info, token.symbol.kind) && operator_info.type == OperatorType::prefix && operator_info.precedence >= min_precedence)
 		{
 			eat_token(tokenizer);
-			current_tree = init_single_syntax_tree(allocator, token, 0, eat_syntax_tree(tokenizer, allocator, operator_info.precedence + 1));
+			current_tree = init_single_syntax_tree(ledger, token, 0, eat_syntax_tree(tokenizer, ledger, operator_info.precedence + 1));
 			ASSERT(current_tree->right);
 		}
 		else if (token.kind == TokenKind::number || token.kind == TokenKind::identifier)
 		{
 			eat_token(tokenizer);
-			current_tree = init_single_syntax_tree(allocator, token, 0, 0);
+			current_tree = init_single_syntax_tree(ledger, token, 0, 0);
 		}
 		else
 		{
@@ -458,19 +512,19 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 			{
 				case OperatorType::binary_left_associative:
 				{
-					current_tree = init_single_syntax_tree(allocator, token, current_tree, eat_syntax_tree(tokenizer, allocator, operator_info.precedence + 1));
+					current_tree = init_single_syntax_tree(ledger, token, current_tree, eat_syntax_tree(tokenizer, ledger, operator_info.precedence + 1));
 					ASSERT(current_tree->right);
 				} break;
 
 				case OperatorType::binary_right_associative:
 				{
-					current_tree = init_single_syntax_tree(allocator, token, current_tree, eat_syntax_tree(tokenizer, allocator, operator_info.precedence));
+					current_tree = init_single_syntax_tree(ledger, token, current_tree, eat_syntax_tree(tokenizer, ledger, operator_info.precedence));
 					ASSERT(current_tree->right);
 				} break;
 
 				case OperatorType::postfix:
 				{
-					current_tree = init_single_syntax_tree(allocator, token, current_tree, 0);
+					current_tree = init_single_syntax_tree(ledger, token, current_tree, 0);
 				} break;
 
 				case OperatorType::prefix:
@@ -482,10 +536,10 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start && parenthetical_application_info.precedence >= min_precedence)
 		{
 			eat_token(tokenizer);
-			SyntaxTree* right_hand_side = eat_syntax_tree(tokenizer, allocator, 0);
+			SyntaxTree* right_hand_side = eat_syntax_tree(tokenizer, ledger, 0);
 			token = eat_token(tokenizer);
 			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
-			current_tree = init_single_syntax_tree(allocator, parenthetical_application_token, current_tree, right_hand_side);
+			current_tree = init_single_syntax_tree(ledger, parenthetical_application_token, current_tree, right_hand_side);
 		}
 		else if
 		(
@@ -493,7 +547,7 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, SyntaxTreeAllocator* 
 			token.kind == TokenKind::identifier && parenthetical_application_info.precedence >= min_precedence
 		)
 		{
-			current_tree = init_single_syntax_tree(allocator, multiplication_token, current_tree, eat_syntax_tree(tokenizer, allocator, multiplication_info.precedence + (multiplication_info.type == OperatorType::binary_right_associative ? 0 : 1)));
+			current_tree = init_single_syntax_tree(ledger, multiplication_token, current_tree, eat_syntax_tree(tokenizer, ledger, multiplication_info.precedence + (multiplication_info.type == OperatorType::binary_right_associative ? 0 : 1)));
 		}
 		else
 		{
@@ -682,7 +736,7 @@ internal bool32 is_token_symbol(Token token, SymbolKind kind)
 	return token.kind == TokenKind::symbol && token.symbol.kind == kind;
 }
 
-internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionArgumentNode* function_argument_node = 0)
+internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionArgumentNode* binded_args = 0)
 {
 	lambda evaluate_expression =
 		[&](SyntaxTree* tree)
@@ -690,7 +744,7 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 			Statement exp = {};
 			exp.tree = tree;
 			exp.type = StatementType::expression;
-			evaluate_statement(&exp, ledger, function_argument_node);
+			evaluate_statement(&exp, ledger, binded_args);
 			ASSERT(exp.expression.is_cached);
 			return exp.expression.cached_evaluation;
 		};
@@ -700,8 +754,8 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 		case StatementType::assertion:
 		{
 			evaluate_statement(statement->assertion.corresponding_statement, ledger);
-			f32 resultant_value = NAN;
 			f32 expectant_value = parse_number(statement->tree->right->token.string);
+			f32 resultant_value = NAN;
 
 			switch (statement->assertion.corresponding_statement->type)
 			{
@@ -798,62 +852,40 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 								{
 									if (statement->tree->left->token.kind == TokenKind::identifier)
 									{
-										FOR_ELEMS(it, ledger->statement_buffer, ledger->statement_count)
+										FOR_ELEMS(function, ledger->statement_buffer, ledger->statement_count)
 										{
-											if (it->type == StatementType::function_declaration && string_eq(it->tree->left->left->token.string, statement->tree->left->token.string))
+											if (function->type == StatementType::function_declaration && function->tree->left->left->token.string == statement->tree->left->token.string)
 											{
-												FunctionArgumentNode other_function_argument_node_buffer[64]; // @TEMP@
-												i32                  other_function_argument_node_count = 0;
+												FunctionArgumentNode* new_binded_args = 0;
+												DEFER { deinit_entire_function_argument_node(ledger, new_binded_args); };
 
-												FunctionArgumentNode*  other_function_argument_node     = 0;
-												FunctionArgumentNode** other_function_argument_node_nil = &other_function_argument_node;
-
-												for (SyntaxTree* application_tree = statement->tree->right, *definition_tree = it->tree->left->right; application_tree; application_tree = application_tree->right)
+												FunctionArgumentNode** new_binded_args_nil    = &new_binded_args;
+												FunctionArgumentNode*  current_function_arg   = function->function_declaration.args;
+												SyntaxTree*            current_parameter_tree = statement->tree->right;
+												while (true)
 												{
-													if (definition_tree && application_tree)
+													if (is_token_symbol(current_parameter_tree->token, SymbolKind::comma))
 													{
-														if (is_token_symbol(application_tree->token, SymbolKind::comma))
-														{
-															ASSERT(is_token_symbol(definition_tree->token, SymbolKind::comma));
-
-															ASSERT(IN_RANGE(other_function_argument_node_count, 0, ARRAY_CAPACITY(other_function_argument_node_buffer)));
-															FunctionArgumentNode* next_node = &other_function_argument_node_buffer[++other_function_argument_node_count];
-
-															next_node->next_node = 0;
-															next_node->string    = definition_tree->left->token.string;
-															next_node->value     = evaluate_expression(application_tree->left);
-
-															*other_function_argument_node_nil = next_node;
-															other_function_argument_node_nil  = &next_node->next_node;
-														}
-														else
-														{
-															ASSERT(!is_token_symbol(definition_tree->token, SymbolKind::comma));
-
-															ASSERT(IN_RANGE(other_function_argument_node_count, 0, ARRAY_CAPACITY(other_function_argument_node_buffer)));
-															FunctionArgumentNode* next_node = &other_function_argument_node_buffer[++other_function_argument_node_count];
-
-															next_node->next_node = 0;
-															next_node->string    = definition_tree->token.string;
-															next_node->value     = evaluate_expression(application_tree);
-
-															*other_function_argument_node_nil = next_node;
-															other_function_argument_node_nil  = &next_node->next_node;
-
-															break;
-														}
-														definition_tree = definition_tree->right;
+														*new_binded_args_nil = init_function_argument_node(ledger, current_function_arg->name, evaluate_expression(current_parameter_tree->left));
+														current_function_arg = current_function_arg->next_node;
 													}
 													else
 													{
-														ASSERT(false); // Function argument mismatch.
+														*new_binded_args_nil = init_function_argument_node(ledger, current_function_arg->name, evaluate_expression(current_parameter_tree));
+														current_function_arg = current_function_arg->next_node;
+														break;
 													}
+
+													current_parameter_tree = current_parameter_tree->right;
+													new_binded_args_nil = &(*new_binded_args_nil)->next_node;
 												}
 
+												ASSERT(current_function_arg == 0);
+
 												Statement exp = {};
-												exp.tree = it->tree->right;
+												exp.tree = function->tree->right;
 												exp.type = StatementType::expression;
-												evaluate_statement(&exp, ledger, other_function_argument_node);
+												evaluate_statement(&exp, ledger, new_binded_args);
 												ASSERT(exp.expression.is_cached);
 												statement->expression.cached_evaluation = exp.expression.cached_evaluation;
 												statement->expression.is_cached         = true;
@@ -891,11 +923,11 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 						ASSERT(!statement->tree->left);
 						ASSERT(!statement->tree->right);
 
-						for (FunctionArgumentNode* node = function_argument_node; node; node = node->next_node)
+						FOR_NODES(binded_args)
 						{
-							if (string_eq(node->string, statement->tree->token.string))
+							if (it->name == statement->tree->token.string)
 							{
-								statement->expression.cached_evaluation = node->value;
+								statement->expression.cached_evaluation = it->value;
 								statement->expression.is_cached         = true;
 								return;
 							}
@@ -903,7 +935,7 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 
 						FOR_ELEMS(it, ledger->statement_buffer, ledger->statement_count)
 						{
-							if (it->type == StatementType::variable_declaration && string_eq(it->tree->left->token.string, statement->tree->token.string))
+							if (it->type == StatementType::variable_declaration && it->tree->left->token.string == statement->tree->token.string)
 							{
 								evaluate_statement(it, ledger);
 								statement->expression.cached_evaluation = it->variable_declaration.cached_evaluation;
@@ -970,54 +1002,48 @@ int main(void)
 	Tokenizer tokenizer = init_tokenizer_from_file(DATA_DIR "meat.meat");
 	DEFER { deinit_tokenizer_from_file(tokenizer); };
 
-	constexpr i32 EXPRESSION_TREE_COUNT = 512;
-	SyntaxTreeAllocator syntax_tree_allocator;
-	syntax_tree_allocator.memory                = reinterpret_cast<SyntaxTree*>(malloc(EXPRESSION_TREE_COUNT * sizeof(SyntaxTree)));
-	syntax_tree_allocator.available_syntax_tree = syntax_tree_allocator.memory;
-	DEFER
-	{
-		i32 counter = 0;
-		for (SyntaxTree* tree = syntax_tree_allocator.available_syntax_tree; tree; tree = tree->left)
-		{
-			counter += 1;
-		}
-		ASSERT(counter == EXPRESSION_TREE_COUNT);
-		free(syntax_tree_allocator.memory);
-	};
-	FOR_RANGE(i, EXPRESSION_TREE_COUNT - 1)
-	{
-		syntax_tree_allocator.available_syntax_tree[i].left = &syntax_tree_allocator.available_syntax_tree[i + 1];
-	}
-	syntax_tree_allocator.available_syntax_tree[EXPRESSION_TREE_COUNT - 1].left = 0;
+	MemoryArena memory_arena;
+	memory_arena.size = MEBIBYTES_OF(1);
+	memory_arena.base = reinterpret_cast<byte*>(malloc(memory_arena.size));
+	memory_arena.used = 0;
+	DEFER { free(memory_arena.base); };
 
 	Ledger ledger = {};
+	ledger.arena = &memory_arena;
 	DEFER
 	{
 		FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count)
 		{
-			deinit_entire_syntax_tree(&syntax_tree_allocator, it->tree);
+			deinit_entire_syntax_tree(&ledger, it->tree);
+
+			if (it->type == StatementType::function_declaration)
+			{
+				deinit_entire_function_argument_node(&ledger, it->function_declaration.args);
+			}
 		}
+
+		ASSERT(ledger.allocated_syntax_tree_count == 0);
+		ASSERT(ledger.allocated_function_argument_node_count == 0);
 	};
 
-	//
-	// Interpreting.
-	//
+	////
+	//// Interpreting.
+	////
 
 	while (peek_token(tokenizer).kind != TokenKind::null)
 	{
 		ASSERT(IN_RANGE(ledger.statement_count, 0, ARRAY_CAPACITY(ledger.statement_buffer)));
-
 		aliasing statement = ledger.statement_buffer[ledger.statement_count];
 		ledger.statement_count += 1;
 
 		statement = {};
-		statement.tree = eat_syntax_tree(&tokenizer, &syntax_tree_allocator);
+		statement.tree = eat_syntax_tree(&tokenizer, &ledger);
 		ASSERT(statement.tree);
 
 		if (is_token_symbol(statement.tree->token, SymbolKind::assert))
 		{
 			ASSERT(IN_RANGE(ledger.statement_count - 2, 0, ledger.statement_count));
-			statement.type = StatementType::assertion;
+			statement.type                              = StatementType::assertion;
 			statement.assertion.corresponding_statement = &ledger.statement_buffer[ledger.statement_count - 2];
 		}
 		else if (is_token_symbol(statement.tree->token, SymbolKind::equal))
@@ -1028,11 +1054,29 @@ int main(void)
 				ASSERT(statement.tree->left->left->token.kind == TokenKind::identifier);
 				FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count - 1)
 				{
-					ASSERT(it->type != StatementType::variable_declaration || !string_eq(it->tree->left->token.string, statement.tree->left->left->token.string));
-					ASSERT(it->type != StatementType::function_declaration || !string_eq(it->tree->left->left->token.string, statement.tree->left->left->token.string));
+					ASSERT(it->type != StatementType::variable_declaration || it->tree->left->token.string != statement.tree->left->left->token.string);
+					ASSERT(it->type != StatementType::function_declaration || it->tree->left->left->token.string != statement.tree->left->left->token.string);
 				}
 
 				statement.type = StatementType::function_declaration;
+
+				FunctionArgumentNode** args_nil = &statement.function_declaration.args;
+				for (SyntaxTree* tree = statement.tree->left->right; tree; tree = tree->right)
+				{
+					if (is_token_symbol(tree->token, SymbolKind::comma))
+					{
+						ASSERT(tree->left->token.kind == TokenKind::identifier);
+						*args_nil = init_function_argument_node(&ledger, tree->left->token.string);
+					}
+					else
+					{
+						ASSERT(tree->token.kind == TokenKind::identifier);
+						*args_nil = init_function_argument_node(&ledger, tree->token.string);
+						break;
+					}
+
+					args_nil  = &(*args_nil)->next_node;
+				}
 			}
 			else
 			{
@@ -1043,8 +1087,8 @@ int main(void)
 				ASSERT(!statement.tree->left->right);
 				FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count - 1)
 				{
-					ASSERT(it->type != StatementType::variable_declaration || !string_eq(it->tree->left->token.string, statement.tree->left->token.string));
-					ASSERT(it->type != StatementType::function_declaration || !string_eq(it->tree->left->left->token.string, statement.tree->left->token.string));
+					ASSERT(it->type != StatementType::variable_declaration || it->tree->left->token.string != statement.tree->left->token.string);
+					ASSERT(it->type != StatementType::function_declaration || it->tree->left->left->token.string != statement.tree->left->token.string);
 				}
 
 				statement.type = StatementType::variable_declaration;

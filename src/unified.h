@@ -48,21 +48,25 @@ typedef double      f64;
 #define CAPACITY_OF_MEMBER_(TYPE, MEMBER)   (CAPACITY_OF_ARRAY_(((TYPE*) 0)->MEMBER))
 #define ARRAY_CAPACITY(...)                 (MACRO_EXPAND_(MACRO_OVERLOADED_2_(__VA_ARGS__, CAPACITY_OF_MEMBER_, CAPACITY_OF_ARRAY_)(__VA_ARGS__)))
 
-#define FOR_INTERVAL_(NAME, MINI, MAXI)     for (i32 NAME = (MINI); NAME < (MAXI); ++NAME)
+#define FOR_INTERVAL_(NAME, MINI, MAXI)     for (i32 NAME = (MINI); NAME < (MAXI); NAME += 1)
 #define FOR_INDICIES_(NAME, MAXI)           FOR_INTERVAL_(NAME, 0, (MAXI))
 #define FOR_REPEAT_(MAXI)                   FOR_INTERVAL_(MACRO_CONCAT_(FOR_REPEAT_, __LINE__), 0, (MAXI))
 #define FOR_RANGE(...)                      MACRO_EXPAND_(MACRO_OVERLOADED_3_(__VA_ARGS__, FOR_INTERVAL_, FOR_INDICIES_, FOR_REPEAT_)(__VA_ARGS__))
-#define FOR_INTERVAL_REV_(NAME, MINI, MAXI) for (i32 NAME = (MAXI) - 1, MACRO_CONCAT_(NAME, min); NAME >= MACRO_CONCAT_(NAME, min); --NAME)
+#define FOR_INTERVAL_REV_(NAME, MINI, MAXI) for (i32 NAME = (MAXI) - 1, MACRO_CONCAT_(NAME, min); NAME >= MACRO_CONCAT_(NAME, min); NAME -= 1)
 #define FOR_INDICIES_REV_(NAME, MAXI)       FOR_INTERVAL_REV_(NAME, 0, (MAXI))
 #define FOR_RANGE_REV(...)                  MACRO_EXPAND_(MACRO_OVERLOADED_3_(__VA_ARGS__, FOR_INTERVAL_REV_, FOR_INDICIES_REV_)(__VA_ARGS__))
 
-#define FOR_POINTER_(NAME, XS, COUNT)       for (i32 MACRO_CONCAT_(NAME, _index) = 0; MACRO_CONCAT_(NAME, _index) < (COUNT); ++MACRO_CONCAT_(NAME, _index)) if (const auto NAME = &(XS)[MACRO_CONCAT_(NAME, _index)]; false); else
+#define FOR_POINTER_(NAME, XS, COUNT)       for (i32 MACRO_CONCAT_(NAME, _index) = 0; MACRO_CONCAT_(NAME, _index) < (COUNT); MACRO_CONCAT_(NAME, _index) += 1) if (const auto NAME = &(XS)[MACRO_CONCAT_(NAME, _index)]; false); else
 #define FOR_ARRAY_(NAME, XS)                FOR_POINTER_(NAME, (XS), ARRAY_CAPACITY(XS))
 #define FOR_IT_(XS)                         FOR_POINTER_(it, (XS), ARRAY_CAPACITY(XS))
 #define FOR_ELEMS(...)                      MACRO_EXPAND_(MACRO_OVERLOADED_3_(__VA_ARGS__, FOR_POINTER_, FOR_ARRAY_, FOR_IT_)(__VA_ARGS__))
-#define FOR_POINTER_REV_(NAME, XS, COUNT)   for (i32 MACRO_CONCAT_(NAME, _index) = (COUNT) - 1; MACRO_CONCAT_(NAME, _index) >= 0; --MACRO_CONCAT_(NAME, _index)) if (const auto NAME = &(XS)[MACRO_CONCAT_(NAME, _index)]; false); else
+#define FOR_POINTER_REV_(NAME, XS, COUNT)   for (i32 MACRO_CONCAT_(NAME, _index) = (COUNT) - 1; MACRO_CONCAT_(NAME, _index) >= 0; MACRO_CONCAT_(NAME, _index) -= 1) if (const auto NAME = &(XS)[MACRO_CONCAT_(NAME, _index)]; false); else
 #define FOR_ARRAY_REV_(NAME, XS)            FOR_POINTER_REV_(NAME, (XS), ARRAY_CAPACITY(XS))
 #define FOR_ELEMS_REV(...)                  MACRO_EXPAND_(MACRO_OVERLOADED_3_(__VA_ARGS__, FOR_POINTER_REV_, FOR_ARRAY_REV_)(__VA_ARGS__))
+
+#define FOR_NODES_(NAME, NODES)             if (auto NAME = (NODES); false); else for (i32 MACRO_CONCAT_(NAME, _index) = 0; NAME; MACRO_CONCAT_(NAME, _index) += 1, NAME = NAME->next_node)
+#define FOR_IT_NODES_(NODES)                FOR_NODES_(it, (NODES))
+#define FOR_NODES(...)                      MACRO_EXPAND_(MACRO_OVERLOADED_2_(__VA_ARGS__, FOR_NODES_, FOR_IT_NODES_)(__VA_ARGS__))
 
 #define IN_RANGE(X, MINI, MAXI)             ((MINI) <= (X) && (X) < (MAXI))
 #define SWAP(X, Y)                          do { auto MACRO_CONCAT_(SWAP_, __LINE__) = *(X); *(X) = *(Y); *(Y) = MACRO_CONCAT_(SWAP_, __LINE__); } while (false)
