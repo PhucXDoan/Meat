@@ -3,64 +3,38 @@
 #include <math.h>
 #include "unified.h"
 
-#define IS_ALPHA(C)         (IN_RANGE((C), 'a', 'z' + 1) || IN_RANGE((C), 'A', 'Z' + 1))
-#define IS_DIGIT(C)         (IN_RANGE((C), '0', '9' + 1))
-#define PASS_STRING(STRING) (STRING).size, (STRING).data
-#define STRLIT(STR)         (String { sizeof(STR) - 1, STR });
-
-struct String
-{
-	i32   size;
-	char* data;
-};
-
-internal constexpr bool32 operator==(String& a, String& b) { return a.size  == b.size  && memcmp(a.data , b.data , a.size ) == 0; }
-internal constexpr bool32 operator!=(String& a, String& b) { return !(a == b); }
-
-enum struct SymbolKind : u8
+enum struct TokenKind : u8
 {
 	null,
+	assertion,
+
+	identifier,
+	number,
+
 	semicolon,
-	plus,
-	minus,
-	asterisk,
-	forward_slash,
-	period,
-	caret,
-	exclamation_point,
-	equal,
-	comma,
 	parenthesis_start,
 	parenthesis_end,
 
 	parenthetical_application,
-	assert
-};
-
-enum struct TokenKind : u8
-{
-	null,
-	symbol,
-	number,
-	identifier
+	equal,
+	comma,
+	plus,
+	minus,
+	asterisk,
+	forward_slash,
+	caret,
+	exclamation_point
 };
 
 struct Token
 {
 	TokenKind kind;
 	String    string;
-	union
-	{
-		struct
-		{
-			SymbolKind kind;
-		} symbol;
-	};
 };
 
 struct Tokenizer
 {
-	String stream;
+	String stream; // @TODO@ Have a token buffer.
 	i32    current_index;
 };
 
@@ -132,7 +106,7 @@ struct Ledger
 	SyntaxTree*           available_syntax_tree;
 	i32                   allocated_function_argument_node_count;
 	FunctionArgumentNode* available_function_argument_node;
-	i32                   statement_count;
+	i32                   statement_count; // @TODO@ Split the different statement types into their own buffer.
 	Statement             statement_buffer[64];
 };
 
@@ -241,6 +215,7 @@ internal void deinit_entire_function_argument_node(Ledger* ledger, FunctionArgum
 	}
 }
 
+// @TODO@ Comments.
 internal void eat_white_space(Tokenizer* tokenizer)
 {
 	while (tokenizer->current_index < tokenizer->stream.size)
@@ -270,7 +245,7 @@ internal Token eat_token(Tokenizer* tokenizer)
 
 	if (tokenizer->current_index < tokenizer->stream.size)
 	{
-		if (IS_DIGIT(tokenizer->stream.data[tokenizer->current_index]))
+		if (is_digit(tokenizer->stream.data[tokenizer->current_index]))
 		{
 			Token token;
 			token.kind        = TokenKind::number;
@@ -280,7 +255,7 @@ internal Token eat_token(Tokenizer* tokenizer)
 			bool32 has_decimal = false;
 			for (tokenizer->current_index += 1; tokenizer->current_index < tokenizer->stream.size; tokenizer->current_index += 1)
 			{
-				if (IS_DIGIT(tokenizer->stream.data[tokenizer->current_index]))
+				if (is_digit(tokenizer->stream.data[tokenizer->current_index]))
 				{
 					token.string.size += 1;
 				}
@@ -305,30 +280,28 @@ internal Token eat_token(Tokenizer* tokenizer)
 		}
 		else
 		{
-			constexpr struct { strlit cstring; SymbolKind kind; } SYMBOLS[] =
+			constexpr struct { strlit cstring; TokenKind kind; } RESERVED[] =
 				{
-					{ ";"     , SymbolKind::semicolon         },
-					{ "+"     , SymbolKind::plus              },
-					{ "-"     , SymbolKind::minus             },
-					{ "*"     , SymbolKind::asterisk          },
-					{ "/"     , SymbolKind::forward_slash     },
-					{ "."     , SymbolKind::period            },
-					{ "^"     , SymbolKind::caret             },
-					{ "!"     , SymbolKind::exclamation_point },
-					{ "="     , SymbolKind::equal             },
-					{ ","     , SymbolKind::comma             },
-					{ "("     , SymbolKind::parenthesis_start },
-					{ ")"     , SymbolKind::parenthesis_end   },
-					{ "ASSERT", SymbolKind::assert            }
+					{ "ASSERT", TokenKind::assertion         },
+					{ ";"     , TokenKind::semicolon         },
+					{ "="     , TokenKind::equal             },
+					{ ","     , TokenKind::comma             },
+					{ "+"     , TokenKind::plus              },
+					{ "-"     , TokenKind::minus             },
+					{ "*"     , TokenKind::asterisk          },
+					{ "/"     , TokenKind::forward_slash     },
+					{ "^"     , TokenKind::caret             },
+					{ "!"     , TokenKind::exclamation_point },
+					{ "("     , TokenKind::parenthesis_start },
+					{ ")"     , TokenKind::parenthesis_end   }
 				};
 
-			FOR_ELEMS(SYMBOLS)
+			FOR_ELEMS(RESERVED)
 			{
 				Token token;
-				token.kind        = TokenKind::symbol;
+				token.kind        = it->kind;
 				token.string.size = 0;
 				token.string.data = tokenizer->stream.data + tokenizer->current_index;
-				token.symbol.kind = it->kind;
 
 				while (tokenizer->current_index + token.string.size < tokenizer->stream.size)
 				{
@@ -348,14 +321,14 @@ internal Token eat_token(Tokenizer* tokenizer)
 				}
 			}
 
-			if (IS_ALPHA(tokenizer->stream.data[tokenizer->current_index]) || tokenizer->stream.data[tokenizer->current_index] == '_')
+			if (is_alpha(tokenizer->stream.data[tokenizer->current_index]) || tokenizer->stream.data[tokenizer->current_index] == '_')
 			{
 				Token token;
 				token.kind        = TokenKind::identifier;
 				token.string.size = 0;
 				token.string.data = tokenizer->stream.data + tokenizer->current_index;
 
-				while (IS_ALPHA(tokenizer->stream.data[tokenizer->current_index]) || tokenizer->stream.data[tokenizer->current_index] == '_')
+				while (is_alpha(tokenizer->stream.data[tokenizer->current_index]) || tokenizer->stream.data[tokenizer->current_index] == '_')
 				{
 					tokenizer->current_index += 1;
 					token.string.size        += 1;
@@ -379,64 +352,64 @@ internal Token peek_token(Tokenizer tokenizer)
 	return eat_token(&tokenizer);
 }
 
-enum struct OperatorType : u8
+enum struct Associativity : u8
 {
-	binary_left_associative,
-	binary_right_associative,
+	prefix,
 	postfix,
-	prefix
+	binary_left_associative,
+	binary_right_associative
 };
 
-struct OperatorInfo
+struct TokenOrder
 {
-	OperatorType type;
-	i32          precedence;
+	Associativity associativity;
+	i32           precedence;
 };
 
-internal bool32 get_operator_info(OperatorInfo* operator_info, SymbolKind kind)
+internal bool32 try_get_token_order(TokenOrder* token_order, TokenKind kind)
 {
 	switch (kind)
 	{
-		case SymbolKind::exclamation_point:
-		operator_info->type       = OperatorType::postfix;
-		operator_info->precedence = 7;
+		case TokenKind::exclamation_point:
+		token_order->associativity = Associativity::postfix;
+		token_order->precedence    = 7;
 		return true;
 
-		case SymbolKind::caret:
-		operator_info->type       = OperatorType::binary_right_associative;
-		operator_info->precedence = 6;
+		case TokenKind::caret:
+		token_order->associativity = Associativity::binary_right_associative;
+		token_order->precedence    = 6;
 		return true;
 
-		case SymbolKind::parenthetical_application:
-		operator_info->type       = OperatorType::binary_left_associative;
-		operator_info->precedence = 5;
+		case TokenKind::parenthetical_application:
+		token_order->associativity = Associativity::binary_left_associative;
+		token_order->precedence    = 5;
 		return true;
 
-		case SymbolKind::asterisk:
-		case SymbolKind::forward_slash:
-		operator_info->type       = OperatorType::binary_left_associative;
-		operator_info->precedence = 4;
+		case TokenKind::asterisk:
+		case TokenKind::forward_slash:
+		token_order->associativity = Associativity::binary_left_associative;
+		token_order->precedence    = 4;
 		return true;
 
-		case SymbolKind::plus:
-		case SymbolKind::minus:
-		operator_info->type       = OperatorType::binary_left_associative;
-		operator_info->precedence = 3;
+		case TokenKind::plus:
+		case TokenKind::minus:
+		token_order->associativity = Associativity::binary_left_associative;
+		token_order->precedence    = 3;
 		return true;
 
-		case SymbolKind::comma:
-		operator_info->type       = OperatorType::binary_right_associative;
-		operator_info->precedence = 2;
+		case TokenKind::comma:
+		token_order->associativity = Associativity::binary_right_associative;
+		token_order->precedence    = 2;
 		return true;
 
-		case SymbolKind::equal:
-		operator_info->type       = OperatorType::binary_left_associative;
-		operator_info->precedence = 1;
+		case TokenKind::equal:
+		token_order->associativity = Associativity::binary_left_associative;
+		token_order->precedence    = 1;
 		return true;
 
-		case SymbolKind::assert:
-		operator_info->type       = OperatorType::prefix;
-		operator_info->precedence = 0;
+		case TokenKind::assertion:
+		token_order->associativity = Associativity::prefix;
+		token_order->precedence    = 0;
 		return true;
 	}
 
@@ -448,46 +421,44 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 m
 {
 	// @TODO@ Clean up.
 	Token parenthetical_application_token;
-	parenthetical_application_token.kind        = TokenKind::symbol;
-	parenthetical_application_token.string      = STRLIT("()");
-	parenthetical_application_token.symbol.kind = SymbolKind::parenthetical_application;
-	OperatorInfo parenthetical_application_info;
-	bool32 is_parenthetical_application_operator = get_operator_info(&parenthetical_application_info, SymbolKind::parenthetical_application);
-	ASSERT(is_parenthetical_application_operator);
+	parenthetical_application_token.kind   = TokenKind::parenthetical_application;
+	parenthetical_application_token.string = STRING_FROM_LITERAL("()");
+	TokenOrder parenthetical_application_order;
+	bool32 parenthetical_application_has_order = try_get_token_order(&parenthetical_application_order, TokenKind::parenthetical_application);
+	ASSERT(parenthetical_application_has_order);
+
 	Token multiplication_token;
-	multiplication_token.kind        = TokenKind::symbol;
-	multiplication_token.string      = STRLIT("*");
-	multiplication_token.symbol.kind = SymbolKind::asterisk;
-	OperatorInfo multiplication_info;
-	bool32 is_multiplication_operator = get_operator_info(&multiplication_info, SymbolKind::asterisk);
-	ASSERT(is_multiplication_operator);
+	multiplication_token.kind   = TokenKind::asterisk;
+	multiplication_token.string = STRING_FROM_LITERAL("*");
+	TokenOrder multiplication_order;
+	bool32 multiplication_has_order = try_get_token_order(&multiplication_order, TokenKind::asterisk);
+	ASSERT(multiplication_has_order);
 
 	SyntaxTree* current_tree;
 
 	{
-		OperatorInfo operator_info;
-		Token        token = peek_token(*tokenizer);
-
-		if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start)
+		Token      token = peek_token(*tokenizer);
+		TokenOrder token_order;
+		if (token.kind == TokenKind::minus)
+		{
+			eat_token(tokenizer);
+			current_tree = init_single_syntax_tree(ledger, token, 0, eat_syntax_tree(tokenizer, ledger, multiplication_order.precedence + (multiplication_order.associativity == Associativity::binary_right_associative ? 0 : 1)));
+			ASSERT(current_tree->right);
+		}
+		else if (try_get_token_order(&token_order, token.kind) && token_order.associativity == Associativity::prefix && token_order.precedence >= min_precedence)
+		{
+			eat_token(tokenizer);
+			current_tree = init_single_syntax_tree(ledger, token, 0, eat_syntax_tree(tokenizer, ledger, token_order.precedence + 1));
+			ASSERT(current_tree->right);
+		}
+		else if (token.kind == TokenKind::parenthesis_start)
 		{
 			eat_token(tokenizer);
 			current_tree = eat_syntax_tree(tokenizer, ledger, 0);
 			ASSERT(current_tree);
 			token = eat_token(tokenizer);
-			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
+			ASSERT(token.kind == TokenKind::parenthesis_end);
 			current_tree = init_single_syntax_tree(ledger, parenthetical_application_token, 0, current_tree);
-		}
-		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::minus)
-		{
-			eat_token(tokenizer);
-			current_tree = init_single_syntax_tree(ledger, token, 0, eat_syntax_tree(tokenizer, ledger, multiplication_info.precedence + (multiplication_info.type == OperatorType::binary_right_associative ? 0 : 1)));
-			ASSERT(current_tree->right);
-		}
-		else if (token.kind == TokenKind::symbol && get_operator_info(&operator_info, token.symbol.kind) && operator_info.type == OperatorType::prefix && operator_info.precedence >= min_precedence)
-		{
-			eat_token(tokenizer);
-			current_tree = init_single_syntax_tree(ledger, token, 0, eat_syntax_tree(tokenizer, ledger, operator_info.precedence + 1));
-			ASSERT(current_tree->right);
 		}
 		else if (token.kind == TokenKind::number || token.kind == TokenKind::identifier)
 		{
@@ -502,52 +473,52 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 m
 
 	while (true)
 	{
-		Token        token = peek_token(*tokenizer);
-		OperatorInfo operator_info;
-		if (token.kind == TokenKind::symbol && get_operator_info(&operator_info, token.symbol.kind) && operator_info.precedence >= min_precedence)
+		Token      token = peek_token(*tokenizer);
+		TokenOrder token_order;
+		if (try_get_token_order(&token_order, token.kind) && token_order.precedence >= min_precedence)
 		{
 			eat_token(tokenizer);
 
-			switch (operator_info.type)
+			switch (token_order.associativity)
 			{
-				case OperatorType::binary_left_associative:
+				case Associativity::binary_left_associative:
 				{
-					current_tree = init_single_syntax_tree(ledger, token, current_tree, eat_syntax_tree(tokenizer, ledger, operator_info.precedence + 1));
+					current_tree = init_single_syntax_tree(ledger, token, current_tree, eat_syntax_tree(tokenizer, ledger, token_order.precedence + 1));
 					ASSERT(current_tree->right);
 				} break;
 
-				case OperatorType::binary_right_associative:
+				case Associativity::binary_right_associative:
 				{
-					current_tree = init_single_syntax_tree(ledger, token, current_tree, eat_syntax_tree(tokenizer, ledger, operator_info.precedence));
+					current_tree = init_single_syntax_tree(ledger, token, current_tree, eat_syntax_tree(tokenizer, ledger, token_order.precedence));
 					ASSERT(current_tree->right);
 				} break;
 
-				case OperatorType::postfix:
+				case Associativity::postfix:
 				{
 					current_tree = init_single_syntax_tree(ledger, token, current_tree, 0);
 				} break;
 
-				case OperatorType::prefix:
+				case Associativity::prefix:
 				{
 					ASSERT(false); // Prefix operator encountered after atom.
 				} break;
 			}
 		}
-		else if (token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_start && parenthetical_application_info.precedence >= min_precedence)
+		else if (token.kind == TokenKind::parenthesis_start && parenthetical_application_order.precedence >= min_precedence)
 		{
 			eat_token(tokenizer);
 			SyntaxTree* right_hand_side = eat_syntax_tree(tokenizer, ledger, 0);
 			token = eat_token(tokenizer);
-			ASSERT(token.kind == TokenKind::symbol && token.symbol.kind == SymbolKind::parenthesis_end);
+			ASSERT(token.kind == TokenKind::parenthesis_end);
 			current_tree = init_single_syntax_tree(ledger, parenthetical_application_token, current_tree, right_hand_side);
 		}
-		else if
+		else if // @TODO@ Might be bugged?
 		(
-			(token.kind == TokenKind::number && (current_tree->token.kind == TokenKind::identifier || current_tree->token.kind == TokenKind::symbol && current_tree->token.symbol.kind == SymbolKind::parenthetical_application)) ||
-			token.kind == TokenKind::identifier && parenthetical_application_info.precedence >= min_precedence
+			(token.kind == TokenKind::number && (current_tree->token.kind == TokenKind::identifier || current_tree->token.kind == TokenKind::parenthetical_application))
+			|| token.kind == TokenKind::identifier && parenthetical_application_order.precedence >= min_precedence
 		)
 		{
-			current_tree = init_single_syntax_tree(ledger, multiplication_token, current_tree, eat_syntax_tree(tokenizer, ledger, multiplication_info.precedence + (multiplication_info.type == OperatorType::binary_right_associative ? 0 : 1)));
+			current_tree = init_single_syntax_tree(ledger, multiplication_token, current_tree, eat_syntax_tree(tokenizer, ledger, multiplication_order.precedence + (multiplication_order.associativity == Associativity::binary_right_associative ? 0 : 1)));
 		}
 		else
 		{
@@ -610,95 +581,89 @@ internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
 	{
 		switch (tree->token.kind)
 		{
-			case TokenKind::symbol:
-			{
-				switch (tree->token.symbol.kind)
-				{
-					case SymbolKind::plus:
-					{
-						DEBUG_print_serialized_syntax_tree(tree->left);
-						printf(" + ");
-						DEBUG_print_serialized_syntax_tree(tree->right);
-					} break;
-
-					case SymbolKind::minus:
-					{
-						if (tree->left)
-						{
-							DEBUG_print_serialized_syntax_tree(tree->left);
-							printf(" - ");
-							DEBUG_print_serialized_syntax_tree(tree->right);
-						}
-						else
-						{
-							printf("-");
-							DEBUG_print_serialized_syntax_tree(tree->right);
-						}
-					} break;
-
-					case SymbolKind::asterisk:
-					{
-						if (tree->left->token.kind == TokenKind::symbol && tree->left->token.symbol.kind == SymbolKind::parenthetical_application || tree->right->token.kind == TokenKind::symbol && tree->right->token.symbol.kind == SymbolKind::parenthetical_application)
-						{
-							DEBUG_print_serialized_syntax_tree(tree->left);
-							DEBUG_print_serialized_syntax_tree(tree->right);
-						}
-						else
-						{
-							DEBUG_print_serialized_syntax_tree(tree->left);
-							printf(" * ");
-							DEBUG_print_serialized_syntax_tree(tree->right);
-						}
-					} break;
-
-					case SymbolKind::forward_slash:
-					{
-						DEBUG_print_serialized_syntax_tree(tree->left);
-						printf("/");
-						DEBUG_print_serialized_syntax_tree(tree->right);
-					} break;
-
-					case SymbolKind::caret:
-					{
-						DEBUG_print_serialized_syntax_tree(tree->left);
-						printf("^");
-						DEBUG_print_serialized_syntax_tree(tree->right);
-					} break;
-
-					case SymbolKind::exclamation_point:
-					{
-						DEBUG_print_serialized_syntax_tree(tree->left);
-						printf("!");
-					} break;
-
-					case SymbolKind::parenthetical_application:
-					{
-						DEBUG_print_serialized_syntax_tree(tree->left);
-						printf("(");
-						DEBUG_print_serialized_syntax_tree(tree->right);
-						printf(")");
-					} break;
-
-					case SymbolKind::equal:
-					{
-						DEBUG_print_serialized_syntax_tree(tree->left);
-						printf(" = ");
-						DEBUG_print_serialized_syntax_tree(tree->right);
-					} break;
-
-					case SymbolKind::comma:
-					{
-						DEBUG_print_serialized_syntax_tree(tree->left);
-						printf(", ");
-						DEBUG_print_serialized_syntax_tree(tree->right);
-					} break;
-				}
-			} break;
-
 			case TokenKind::number:
 			case TokenKind::identifier:
 			{
 				printf("%.*s", PASS_STRING(tree->token.string));
+			} break;
+
+			case TokenKind::plus:
+			{
+				DEBUG_print_serialized_syntax_tree(tree->left);
+				printf(" + ");
+				DEBUG_print_serialized_syntax_tree(tree->right);
+			} break;
+
+			case TokenKind::minus:
+			{
+				if (tree->left)
+				{
+					DEBUG_print_serialized_syntax_tree(tree->left);
+					printf(" - ");
+					DEBUG_print_serialized_syntax_tree(tree->right);
+				}
+				else
+				{
+					printf("-");
+					DEBUG_print_serialized_syntax_tree(tree->right);
+				}
+			} break;
+
+			case TokenKind::asterisk:
+			{
+				if (tree->left->token.kind == TokenKind::parenthetical_application || tree->right->token.kind == TokenKind::parenthetical_application)
+				{
+					DEBUG_print_serialized_syntax_tree(tree->left);
+					DEBUG_print_serialized_syntax_tree(tree->right);
+				}
+				else
+				{
+					DEBUG_print_serialized_syntax_tree(tree->left);
+					printf(" * ");
+					DEBUG_print_serialized_syntax_tree(tree->right);
+				}
+			} break;
+
+			case TokenKind::forward_slash:
+			{
+				DEBUG_print_serialized_syntax_tree(tree->left);
+				printf("/");
+				DEBUG_print_serialized_syntax_tree(tree->right);
+			} break;
+
+			case TokenKind::caret:
+			{
+				DEBUG_print_serialized_syntax_tree(tree->left);
+				printf("^");
+				DEBUG_print_serialized_syntax_tree(tree->right);
+			} break;
+
+			case TokenKind::exclamation_point:
+			{
+				DEBUG_print_serialized_syntax_tree(tree->left);
+				printf("!");
+			} break;
+
+			case TokenKind::parenthetical_application:
+			{
+				DEBUG_print_serialized_syntax_tree(tree->left);
+				printf("(");
+				DEBUG_print_serialized_syntax_tree(tree->right);
+				printf(")");
+			} break;
+
+			case TokenKind::equal:
+			{
+				DEBUG_print_serialized_syntax_tree(tree->left);
+				printf(" = ");
+				DEBUG_print_serialized_syntax_tree(tree->right);
+			} break;
+
+			case TokenKind::comma:
+			{
+				DEBUG_print_serialized_syntax_tree(tree->left);
+				printf(", ");
+				DEBUG_print_serialized_syntax_tree(tree->right);
 			} break;
 		}
 	}
@@ -706,11 +671,6 @@ internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
 
 internal bool32 DEBUG_token_eq(Token a, Token b)
 {
-	if (a.kind == TokenKind::symbol && b.kind == TokenKind::symbol && a.symbol.kind != b.symbol.kind)
-	{
-		return false;
-	}
-
 	return a.kind == b.kind && memcmp(a.string.data, b.string.data, a.string.size) == 0;
 }
 
@@ -730,11 +690,6 @@ internal bool32 DEBUG_syntax_tree_eq(SyntaxTree* a, SyntaxTree* b)
 	}
 }
 #endif
-
-internal bool32 is_token_symbol(Token token, SymbolKind kind)
-{
-	return token.kind == TokenKind::symbol && token.symbol.kind == kind;
-}
 
 internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionArgumentNode* binded_args = 0)
 {
@@ -798,126 +753,6 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 			{
 				switch (statement->tree->token.kind)
 				{
-					case TokenKind::symbol:
-					{
-						switch (statement->tree->token.symbol.kind)
-						{
-							case SymbolKind::plus:
-							{
-								statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) + evaluate_expression(statement->tree->right);
-								statement->expression.is_cached         = true;
-							} break;
-
-							case SymbolKind::minus:
-							{
-								if (statement->tree->left)
-								{
-									statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) - evaluate_expression(statement->tree->right);
-								}
-								else
-								{
-									statement->expression.cached_evaluation = -evaluate_expression(statement->tree->right);
-								}
-								statement->expression.is_cached = true;
-							} break;
-
-							case SymbolKind::asterisk:
-							{
-								statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) * evaluate_expression(statement->tree->right);
-								statement->expression.is_cached         = true;
-							} break;
-
-							case SymbolKind::forward_slash:
-							{
-								statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) / evaluate_expression(statement->tree->right);
-								statement->expression.is_cached         = true;
-							} break;
-
-							case SymbolKind::caret:
-							{
-								statement->expression.cached_evaluation = powf(evaluate_expression(statement->tree->left), evaluate_expression(statement->tree->right));
-								statement->expression.is_cached         = true;
-							} break;
-
-							case SymbolKind::exclamation_point:
-							{
-								ASSERT(!statement->tree->right);
-								statement->expression.cached_evaluation = static_cast<f32>(tgamma(evaluate_expression(statement->tree->left) + 1.0));
-								statement->expression.is_cached         = true;
-							} break;
-
-							case SymbolKind::parenthetical_application:
-							{
-								if (statement->tree->left)
-								{
-									if (statement->tree->left->token.kind == TokenKind::identifier)
-									{
-										FOR_ELEMS(function, ledger->statement_buffer, ledger->statement_count)
-										{
-											if (function->type == StatementType::function_declaration && function->tree->left->left->token.string == statement->tree->left->token.string)
-											{
-												FunctionArgumentNode* new_binded_args = 0;
-												DEFER { deinit_entire_function_argument_node(ledger, new_binded_args); };
-
-												FunctionArgumentNode** new_binded_args_nil    = &new_binded_args;
-												FunctionArgumentNode*  current_function_arg   = function->function_declaration.args;
-												SyntaxTree*            current_parameter_tree = statement->tree->right;
-												while (true)
-												{
-													if (is_token_symbol(current_parameter_tree->token, SymbolKind::comma))
-													{
-														*new_binded_args_nil = init_function_argument_node(ledger, current_function_arg->name, evaluate_expression(current_parameter_tree->left));
-														current_function_arg = current_function_arg->next_node;
-													}
-													else
-													{
-														*new_binded_args_nil = init_function_argument_node(ledger, current_function_arg->name, evaluate_expression(current_parameter_tree));
-														current_function_arg = current_function_arg->next_node;
-														break;
-													}
-
-													current_parameter_tree = current_parameter_tree->right;
-													new_binded_args_nil = &(*new_binded_args_nil)->next_node;
-												}
-
-												ASSERT(current_function_arg == 0);
-
-												Statement exp = {};
-												exp.tree = function->tree->right;
-												exp.type = StatementType::expression;
-												evaluate_statement(&exp, ledger, new_binded_args);
-												ASSERT(exp.expression.is_cached);
-												statement->expression.cached_evaluation = exp.expression.cached_evaluation;
-												statement->expression.is_cached         = true;
-												return;
-											}
-										}
-									}
-
-									statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) * evaluate_expression(statement->tree->right);
-								}
-								else
-								{
-									statement->expression.cached_evaluation = evaluate_expression(statement->tree->right);
-								}
-								statement->expression.is_cached = true;
-							} break;
-
-							default:
-							{
-								ASSERT(false); // Unknown symbol.
-							} break;
-						}
-					} break;
-
-					case TokenKind::number:
-					{
-						ASSERT(!statement->tree->left);
-						ASSERT(!statement->tree->right);
-						statement->expression.cached_evaluation = parse_number(statement->tree->token.string);
-						statement->expression.is_cached         = true;
-					} break;
-
 					case TokenKind::identifier:
 					{
 						ASSERT(!statement->tree->left);
@@ -945,6 +780,115 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 						}
 
 						ASSERT(false); // Couldn't find declaration.
+					} break;
+
+					case TokenKind::number:
+					{
+						ASSERT(!statement->tree->left);
+						ASSERT(!statement->tree->right);
+						statement->expression.cached_evaluation = parse_number(statement->tree->token.string);
+						statement->expression.is_cached         = true;
+					} break;
+
+					case TokenKind::plus:
+					{
+						statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) + evaluate_expression(statement->tree->right);
+						statement->expression.is_cached         = true;
+					} break;
+
+					case TokenKind::minus:
+					{
+						if (statement->tree->left)
+						{
+							statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) - evaluate_expression(statement->tree->right);
+						}
+						else
+						{
+							statement->expression.cached_evaluation = -evaluate_expression(statement->tree->right);
+						}
+						statement->expression.is_cached = true;
+					} break;
+
+					case TokenKind::asterisk:
+					{
+						statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) * evaluate_expression(statement->tree->right);
+						statement->expression.is_cached         = true;
+					} break;
+
+					case TokenKind::forward_slash:
+					{
+						statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) / evaluate_expression(statement->tree->right);
+						statement->expression.is_cached         = true;
+					} break;
+
+					case TokenKind::caret:
+					{
+						statement->expression.cached_evaluation = powf(evaluate_expression(statement->tree->left), evaluate_expression(statement->tree->right));
+						statement->expression.is_cached         = true;
+					} break;
+
+					case TokenKind::exclamation_point:
+					{
+						ASSERT(!statement->tree->right);
+						statement->expression.cached_evaluation = static_cast<f32>(tgamma(evaluate_expression(statement->tree->left) + 1.0));
+						statement->expression.is_cached         = true;
+					} break;
+
+					case TokenKind::parenthetical_application:
+					{
+						if (statement->tree->left)
+						{
+							if (statement->tree->left->token.kind == TokenKind::identifier)
+							{
+								FOR_ELEMS(function, ledger->statement_buffer, ledger->statement_count)
+								{
+									if (function->type == StatementType::function_declaration && function->tree->left->left->token.string == statement->tree->left->token.string)
+									{
+										FunctionArgumentNode* new_binded_args = 0;
+										DEFER { deinit_entire_function_argument_node(ledger, new_binded_args); };
+
+										FunctionArgumentNode** new_binded_args_nil    = &new_binded_args;
+										FunctionArgumentNode*  current_function_arg   = function->function_declaration.args;
+										SyntaxTree*            current_parameter_tree = statement->tree->right;
+										while (true)
+										{
+											if (current_parameter_tree->token.kind == TokenKind::comma)
+											{
+												*new_binded_args_nil = init_function_argument_node(ledger, current_function_arg->name, evaluate_expression(current_parameter_tree->left));
+												current_function_arg = current_function_arg->next_node;
+											}
+											else
+											{
+												*new_binded_args_nil = init_function_argument_node(ledger, current_function_arg->name, evaluate_expression(current_parameter_tree));
+												current_function_arg = current_function_arg->next_node;
+												break;
+											}
+
+											current_parameter_tree = current_parameter_tree->right;
+											new_binded_args_nil = &(*new_binded_args_nil)->next_node;
+										}
+
+										ASSERT(current_function_arg == 0);
+
+										Statement exp = {};
+										exp.tree = function->tree->right;
+										exp.type = StatementType::expression;
+										evaluate_statement(&exp, ledger, new_binded_args);
+										ASSERT(exp.expression.is_cached);
+										statement->expression.cached_evaluation = exp.expression.cached_evaluation;
+										statement->expression.is_cached         = true;
+										return;
+									}
+								}
+							}
+
+							statement->expression.cached_evaluation = evaluate_expression(statement->tree->left) * evaluate_expression(statement->tree->right);
+						}
+						else
+						{
+							statement->expression.cached_evaluation = evaluate_expression(statement->tree->right);
+						}
+						statement->expression.is_cached = true;
 					} break;
 
 					default:
@@ -1040,15 +984,15 @@ int main(void)
 		statement.tree = eat_syntax_tree(&tokenizer, &ledger);
 		ASSERT(statement.tree);
 
-		if (is_token_symbol(statement.tree->token, SymbolKind::assert))
+		if (statement.tree->token.kind == TokenKind::assertion)
 		{
 			ASSERT(IN_RANGE(ledger.statement_count - 2, 0, ledger.statement_count));
 			statement.type                              = StatementType::assertion;
 			statement.assertion.corresponding_statement = &ledger.statement_buffer[ledger.statement_count - 2];
 		}
-		else if (is_token_symbol(statement.tree->token, SymbolKind::equal))
+		else if (statement.tree->token.kind == TokenKind::equal)
 		{
-			if (is_token_symbol(statement.tree->left->token, SymbolKind::parenthetical_application))
+			if (statement.tree->left->token.kind == TokenKind::parenthetical_application)
 			{
 				ASSERT(statement.tree->left->left);
 				ASSERT(statement.tree->left->left->token.kind == TokenKind::identifier);
@@ -1063,7 +1007,7 @@ int main(void)
 				FunctionArgumentNode** args_nil = &statement.function_declaration.args;
 				for (SyntaxTree* tree = statement.tree->left->right; tree; tree = tree->right)
 				{
-					if (is_token_symbol(tree->token, SymbolKind::comma))
+					if (tree->token.kind == TokenKind::comma)
 					{
 						ASSERT(tree->left->token.kind == TokenKind::identifier);
 						*args_nil = init_function_argument_node(&ledger, tree->left->token.string);
@@ -1100,7 +1044,7 @@ int main(void)
 		}
 
 		Token terminating_token = eat_token(&tokenizer);
-		ASSERT(is_token_symbol(terminating_token, SymbolKind::semicolon));
+		ASSERT(terminating_token.kind == TokenKind::semicolon);
 
 		DEBUG_print_syntax_tree(statement.tree);
 		printf("===================\n");

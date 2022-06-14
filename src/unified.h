@@ -554,17 +554,43 @@ internal f32 atan2(vf2 v) { return atan2f(v.y, v.x); }
 
 #include <xmmintrin.h>
 
-global const __m128 m_0   = _mm_set_ps1(0.0f);
-global const __m128 m_1   = _mm_set_ps1(1.0f);
-global const __m128 m_2   = _mm_set_ps1(2.0f);
-global const __m128 m_3   = _mm_set_ps1(3.0f);
-global const __m128 m_4   = _mm_set_ps1(4.0f);
-global const __m128 m_8   = _mm_set_ps1(8.0f);
-global const __m128 m_inf = _mm_set_ps1(INFINITY);
-global const __m128 m_255 = _mm_set_ps1(255.0f);
+global constexpr __m128 m_0   = {     0.0f,     0.0f,     0.0f,     0.0f };
+global constexpr __m128 m_1   = {     1.0f,     1.0f,     1.0f,     1.0f };
+global constexpr __m128 m_2   = {     2.0f,     2.0f,     2.0f,     2.0f };
+global constexpr __m128 m_3   = {     3.0f,     3.0f,     3.0f,     3.0f };
+global constexpr __m128 m_4   = {     4.0f,     4.0f,     4.0f,     4.0f };
+global constexpr __m128 m_8   = {     8.0f,     8.0f,     8.0f,     8.0f };
+global constexpr __m128 m_255 = {   255.0f,   255.0f,   255.0f,   255.0f };
+global constexpr __m128 m_inf = { INFINITY, INFINITY, INFINITY, INFINITY };
 
 internal __m128 square(__m128 x                    ) { return _mm_mul_ps(x, x); }
 internal __m128 cube  (__m128 x                    ) { return _mm_mul_ps(_mm_mul_ps(x, x), x); }
 internal __m128 lerp  (__m128 a, __m128 b, __m128 t) { return _mm_add_ps(_mm_mul_ps(a, _mm_sub_ps(m_1, t)), _mm_mul_ps(b, t)); }
 internal __m128 clamp (__m128 x, __m128 a, __m128 b) { return _mm_min_ps(_mm_max_ps(x, a), b); }
+
+//
+// String.
+//
+
+#define PASS_STRING(STRING)         (STRING).size, (STRING).data
+#define STRING_FROM_LITERAL(STRLIT) (String { sizeof(STRLIT) - 1, STRLIT });
+
+internal constexpr bool32 is_alpha(char c)
+{
+	return IN_RANGE(c, 'a', 'z' + 1) || IN_RANGE(c, 'A', 'Z' + 1);
+}
+
+internal constexpr bool32 is_digit(char c)
+{
+	return IN_RANGE(c, '0', '9' + 1);
+}
+
+struct String
+{
+	i32   size;
+	char* data;
+};
+
+internal constexpr bool32 operator==(String& a, String& b) { return a.size  == b.size  && memcmp(a.data , b.data , a.size ) == 0; }
+internal constexpr bool32 operator!=(String& a, String& b) { return !(a == b); }
 
