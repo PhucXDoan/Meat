@@ -106,7 +106,7 @@ struct Ledger
 	SyntaxTree*           available_syntax_tree;
 	i32                   allocated_function_argument_node_count;
 	FunctionArgumentNode* available_function_argument_node;
-	i32                   statement_count; // @TODO@ Split the different statement types into their own buffer.
+	i32                   statement_count;
 	Statement             statement_buffer[64];
 };
 
@@ -215,7 +215,6 @@ internal void deinit_entire_function_argument_node(Ledger* ledger, FunctionArgum
 	}
 }
 
-// @TODO@ Comments.
 internal void eat_white_space(Tokenizer* tokenizer)
 {
 	while (tokenizer->current_index < tokenizer->stream.size)
@@ -230,6 +229,21 @@ internal void eat_white_space(Tokenizer* tokenizer)
 				tokenizer->current_index += 1;
 			} break;
 
+			case '/':
+			{
+				if (tokenizer->current_index + 1 < tokenizer->stream.size && tokenizer->stream.data[tokenizer->current_index + 1] == '/')
+				{
+					while (tokenizer->current_index < tokenizer->stream.size && tokenizer->stream.data[tokenizer->current_index] != '\n')
+					{
+						tokenizer->current_index += 1;
+					}
+				}
+				else
+				{
+					return;
+				}
+			} break;
+
 			default:
 			{
 				return;
@@ -238,21 +252,20 @@ internal void eat_white_space(Tokenizer* tokenizer)
 	}
 }
 
-// @TODO@ Leading decimal support.
 internal Token eat_token(Tokenizer* tokenizer)
 {
 	eat_white_space(tokenizer);
 
 	if (tokenizer->current_index < tokenizer->stream.size)
 	{
-		if (is_digit(tokenizer->stream.data[tokenizer->current_index]))
+		if (is_digit(tokenizer->stream.data[tokenizer->current_index]) || tokenizer->stream.data[tokenizer->current_index] == '.')
 		{
 			Token token;
 			token.kind        = TokenKind::number;
 			token.string.size = 1;
 			token.string.data = tokenizer->stream.data + tokenizer->current_index;
 
-			bool32 has_decimal = false;
+			bool32 has_decimal = tokenizer->stream.data[tokenizer->current_index] == '.';
 			for (tokenizer->current_index += 1; tokenizer->current_index < tokenizer->stream.size; tokenizer->current_index += 1)
 			{
 				if (is_digit(tokenizer->stream.data[tokenizer->current_index]))
@@ -275,6 +288,8 @@ internal Token eat_token(Tokenizer* tokenizer)
 					break;
 				}
 			}
+
+			ASSERT(!has_decimal || (token.string.size > 1 && token.string.data[token.string.size - 1] != '.'));
 
 			return token;
 		}
