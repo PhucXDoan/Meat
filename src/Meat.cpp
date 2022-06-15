@@ -28,14 +28,16 @@ enum struct TokenKind : u8
 
 struct Token
 {
-	TokenKind kind;
-	String    string;
+	TokenKind  kind;
+	StringView string;
 };
 
+// @TODO@ Have a token buffer.
 struct Tokenizer
 {
-	String stream; // @TODO@ Have a token buffer.
-	i32    current_index;
+	i32   stream_size;
+	char* stream_data;
+	i32   current_index;
 };
 
 struct SyntaxTree
@@ -48,7 +50,7 @@ struct SyntaxTree
 struct FunctionArgumentNode
 {
 	FunctionArgumentNode* next_node;
-	String                name;
+	StringView            name;
 	f32                   value;
 };
 
@@ -132,17 +134,17 @@ internal Tokenizer init_tokenizer_from_file(strlit file_path)
 	tokenizer.current_index = 0;
 
 	fseek(file, 0, SEEK_END);
-	tokenizer.stream.size = ftell(file);
-	tokenizer.stream.data = reinterpret_cast<char*>(malloc(tokenizer.stream.size));
+	tokenizer.stream_size = ftell(file);
+	tokenizer.stream_data = reinterpret_cast<char*>(malloc(tokenizer.stream_size));
 	fseek(file, 0, SEEK_SET);
-	fread(tokenizer.stream.data, sizeof(char), tokenizer.stream.size, file);
+	fread(tokenizer.stream_data, sizeof(char), tokenizer.stream_size, file);
 
 	return tokenizer;
 }
 
 internal void deinit_tokenizer_from_file(Tokenizer tokenizer)
 {
-	free(tokenizer.stream.data);
+	free(tokenizer.stream_data);
 }
 
 internal SyntaxTree* init_single_syntax_tree(Ledger* ledger, Token token, SyntaxTree* left, SyntaxTree* right)
@@ -189,7 +191,7 @@ internal void deinit_entire_syntax_tree(Ledger* ledger, SyntaxTree* tree)
 	}
 }
 
-internal FunctionArgumentNode* init_function_argument_node(Ledger* ledger, String name, f32 value = 0.0f)
+internal FunctionArgumentNode* init_function_argument_node(Ledger* ledger, StringView name, f32 value = 0.0f)
 {
 	ledger->allocated_function_argument_node_count += 1;
 	FunctionArgumentNode* allocation;
@@ -227,9 +229,9 @@ internal void deinit_entire_function_argument_node(Ledger* ledger, FunctionArgum
 
 internal void eat_white_space(Tokenizer* tokenizer)
 {
-	while (tokenizer->current_index < tokenizer->stream.size)
+	while (tokenizer->current_index < tokenizer->stream_size)
 	{
-		switch (tokenizer->stream.data[tokenizer->current_index])
+		switch (tokenizer->stream_data[tokenizer->current_index])
 		{
 			case ' ':
 			case '\t':
@@ -241,9 +243,9 @@ internal void eat_white_space(Tokenizer* tokenizer)
 
 			case '/':
 			{
-				if (tokenizer->current_index + 1 < tokenizer->stream.size && tokenizer->stream.data[tokenizer->current_index + 1] == '/')
+				if (tokenizer->current_index + 1 < tokenizer->stream_size && tokenizer->stream_data[tokenizer->current_index + 1] == '/')
 				{
-					while (tokenizer->current_index < tokenizer->stream.size && tokenizer->stream.data[tokenizer->current_index] != '\n')
+					while (tokenizer->current_index < tokenizer->stream_size && tokenizer->stream_data[tokenizer->current_index] != '\n')
 					{
 						tokenizer->current_index += 1;
 					}
@@ -266,30 +268,30 @@ internal Token eat_token(Tokenizer* tokenizer)
 {
 	eat_white_space(tokenizer);
 
-	if (tokenizer->current_index < tokenizer->stream.size)
+	if (tokenizer->current_index < tokenizer->stream_size)
 	{
-		if (is_digit(tokenizer->stream.data[tokenizer->current_index]) || tokenizer->stream.data[tokenizer->current_index] == '.')
+		if (is_digit(tokenizer->stream_data[tokenizer->current_index]) || tokenizer->stream_data[tokenizer->current_index] == '.')
 		{
 			Token token;
 			token.kind        = TokenKind::number;
 			token.string.size = 1;
-			token.string.data = tokenizer->stream.data + tokenizer->current_index;
+			token.string.data = tokenizer->stream_data + tokenizer->current_index;
 
-			bool32 has_decimal = tokenizer->stream.data[tokenizer->current_index] == '.';
-			for (tokenizer->current_index += 1; tokenizer->current_index < tokenizer->stream.size; tokenizer->current_index += 1)
+			bool32 has_decimal = tokenizer->stream_data[tokenizer->current_index] == '.';
+			for (tokenizer->current_index += 1; tokenizer->current_index < tokenizer->stream_size; tokenizer->current_index += 1)
 			{
-				if (is_digit(tokenizer->stream.data[tokenizer->current_index]))
+				if (is_digit(tokenizer->stream_data[tokenizer->current_index]))
 				{
 					token.string.size += 1;
 				}
-				else if (tokenizer->stream.data[tokenizer->current_index] == '.' && !has_decimal)
+				else if (tokenizer->stream_data[tokenizer->current_index] == '.' && !has_decimal)
 				{
 					token.string.size += 1;
 					has_decimal        = true;
 				}
 				else
 				{
-					if (tokenizer->stream.data[tokenizer->current_index] == '.' && has_decimal)
+					if (tokenizer->stream_data[tokenizer->current_index] == '.' && has_decimal)
 					{
 						ASSERT(false); // A decimal has already been used in the number.
 						return {};
@@ -326,11 +328,11 @@ internal Token eat_token(Tokenizer* tokenizer)
 				Token token;
 				token.kind        = it->kind;
 				token.string.size = 0;
-				token.string.data = tokenizer->stream.data + tokenizer->current_index;
+				token.string.data = tokenizer->stream_data + tokenizer->current_index;
 
-				while (tokenizer->current_index + token.string.size < tokenizer->stream.size)
+				while (tokenizer->current_index + token.string.size < tokenizer->stream_size)
 				{
-					if (tokenizer->stream.data[tokenizer->current_index + token.string.size] == it->cstring[token.string.size])
+					if (tokenizer->stream_data[tokenizer->current_index + token.string.size] == it->cstring[token.string.size])
 					{
 						token.string.size += 1;
 						if (it->cstring[token.string.size] == '\0')
@@ -346,14 +348,14 @@ internal Token eat_token(Tokenizer* tokenizer)
 				}
 			}
 
-			if (is_alpha(tokenizer->stream.data[tokenizer->current_index]) || tokenizer->stream.data[tokenizer->current_index] == '_')
+			if (is_alpha(tokenizer->stream_data[tokenizer->current_index]) || tokenizer->stream_data[tokenizer->current_index] == '_')
 			{
 				Token token;
 				token.kind        = TokenKind::identifier;
 				token.string.size = 0;
-				token.string.data = tokenizer->stream.data + tokenizer->current_index;
+				token.string.data = tokenizer->stream_data + tokenizer->current_index;
 
-				while (is_alpha(tokenizer->stream.data[tokenizer->current_index]) || tokenizer->stream.data[tokenizer->current_index] == '_')
+				while (is_alpha(tokenizer->stream_data[tokenizer->current_index]) || is_digit(tokenizer->stream_data[tokenizer->current_index]) || tokenizer->stream_data[tokenizer->current_index] == '_')
 				{
 					tokenizer->current_index += 1;
 					token.string.size        += 1;
@@ -447,14 +449,14 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 m
 	// @TODO@ Clean up.
 	Token parenthetical_application_token;
 	parenthetical_application_token.kind   = TokenKind::parenthetical_application;
-	parenthetical_application_token.string = LSTR("()");
+	parenthetical_application_token.string = STRING_VIEW_OF("()");
 	TokenOrder parenthetical_application_order;
 	bool32 parenthetical_application_has_order = try_get_token_order(&parenthetical_application_order, TokenKind::parenthetical_application);
 	ASSERT(parenthetical_application_has_order);
 
 	Token multiplication_token;
 	multiplication_token.kind   = TokenKind::asterisk;
-	multiplication_token.string = LSTR("*");
+	multiplication_token.string = STRING_VIEW_OF("*");
 	TokenOrder multiplication_order;
 	bool32 multiplication_has_order = try_get_token_order(&multiplication_order, TokenKind::asterisk);
 	ASSERT(multiplication_has_order);
@@ -555,16 +557,16 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 m
 }
 
 // @TODO@ Make this more robust.
-internal f32 parse_number(String string)
+internal f32 parse_number(StringView string)
 {
 	char buffer[64];
-	sprintf_s(buffer, sizeof(buffer), "%.*s", PASS_STRING(string));
+	sprintf_s(buffer, sizeof(buffer), "%.*s", PASS_STRING_VIEW(string));
 	f32 result;
 	sscanf_s(buffer, "%f", &result);
 	return result;
 }
 
-internal bool32 is_name_defined(String name, Ledger* ledger)
+internal bool32 is_name_defined(StringView name, Ledger* ledger)
 {
 	FOR_ELEMS(PREDEFINED_CONSTANTS)
 	{
@@ -610,7 +612,7 @@ internal void DEBUG_print_syntax_tree(SyntaxTree* tree, i32 depth = 0, u64 path 
 				printf("%llu", (path >> i) & 0b1);
 			}
 
-			printf(" : `%.*s`\n", PASS_STRING(tree->token.string));
+			printf(" : `%.*s`\n", PASS_STRING_VIEW(tree->token.string));
 		}
 		else
 		{
@@ -619,7 +621,7 @@ internal void DEBUG_print_syntax_tree(SyntaxTree* tree, i32 depth = 0, u64 path 
 			{
 				printf("%llu", (path >> i) & 0b1);
 			}
-			printf(" : `%.*s`\n", PASS_STRING(tree->token.string));
+			printf(" : `%.*s`\n", PASS_STRING_VIEW(tree->token.string));
 
 			if (tree->left)
 			{
@@ -642,7 +644,7 @@ internal void DEBUG_print_serialized_syntax_tree(SyntaxTree* tree)
 			case TokenKind::number:
 			case TokenKind::identifier:
 			{
-				printf("%.*s", PASS_STRING(tree->token.string));
+				printf("%.*s", PASS_STRING_VIEW(tree->token.string));
 			} break;
 
 			case TokenKind::plus:
@@ -1182,18 +1184,18 @@ int main(void)
 
 	//	if (token.kind == TokenKind::null)
 	//	{
-	//		ASSERT(tokenizer.current_index == tokenizer.stream.size); // Tokenizer must finish the stream.
+	//		ASSERT(tokenizer.current_index == tokenizer.stream_size); // Tokenizer must finish the stream_
 	//		break;
 	//	}
 	//	else
 	//	{
 	//		if (token.kind == TokenKind::number)
 	//		{
-	//			printf("Token : `%.*s` : %f\n", PASS_STRING(token.string), parse_number(token.string));
+	//			printf("Token : `%.*s` : %f\n", PASS_STRING_VIEW(token.string), parse_number(token.string));
 	//		}
 	//		else
 	//		{
-	//			printf("Token : `%.*s`\n", PASS_STRING(token.string));
+	//			printf("Token : `%.*s`\n", PASS_STRING_VIEW(token.string));
 	//		}
 	//	}
 	//}

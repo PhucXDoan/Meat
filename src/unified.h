@@ -572,8 +572,8 @@ internal __m128 clamp (const __m128& x, const __m128& a, const __m128& b) { retu
 // String.
 //
 
-#define PASS_STRING(STRING) (STRING).size, (STRING).data
-#define LSTR(STRLIT)        (String { sizeof(STRLIT) - 1, STRLIT })
+#define PASS_STRING_VIEW(STRING_VIEW) (STRING_VIEW).size, (STRING_VIEW).data
+#define STRING_VIEW_OF(STRLIT)        (StringView { sizeof(STRLIT) - 1, STRLIT })
 
 internal constexpr bool32 is_alpha(const char& c)
 {
@@ -585,11 +585,16 @@ internal constexpr bool32 is_digit(const char& c)
 	return IN_RANGE(c, '0', '9' + 1);
 }
 
-struct String
+struct StringView
 {
-	i32   size;
-	char* data;
+	i32         size;
+	const char* data;
 };
 
-internal constexpr bool32 operator==(const String& a, const String& b) { return a.size == b.size && memcmp(a.data, b.data, a.size) == 0; }
-internal constexpr bool32 operator!=(const String& a, const String& b) { return !(a == b); }
+internal constexpr bool32 operator==(const StringView& a, const StringView& b) { return a.size == b.size && memcmp(a.data, b.data, a.size) == 0; }
+internal constexpr bool32 operator!=(const StringView& a, const StringView& b) { return !(a == b); }
+
+internal constexpr bool32 starts_with(const StringView& prefix, const StringView& string)
+{
+	return string.size >= prefix.size && StringView { prefix.size, string.data } == prefix;
+}
