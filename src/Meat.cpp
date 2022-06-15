@@ -52,6 +52,16 @@ struct FunctionArgumentNode
 	f32                   value;
 };
 
+struct Value
+{
+	f32 number;
+};
+
+typedef Value Function(FunctionArgumentNode*);
+
+#include "predefined.cpp"
+#include "meta/predefined.h"
+
 enum struct VariableDeclarationStatus : u8
 {
 	yet_calculated,
@@ -437,14 +447,14 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 m
 	// @TODO@ Clean up.
 	Token parenthetical_application_token;
 	parenthetical_application_token.kind   = TokenKind::parenthetical_application;
-	parenthetical_application_token.string = STRING_FROM_LITERAL("()");
+	parenthetical_application_token.string = LSTR("()");
 	TokenOrder parenthetical_application_order;
 	bool32 parenthetical_application_has_order = try_get_token_order(&parenthetical_application_order, TokenKind::parenthetical_application);
 	ASSERT(parenthetical_application_has_order);
 
 	Token multiplication_token;
 	multiplication_token.kind   = TokenKind::asterisk;
-	multiplication_token.string = STRING_FROM_LITERAL("*");
+	multiplication_token.string = LSTR("*");
 	TokenOrder multiplication_order;
 	bool32 multiplication_has_order = try_get_token_order(&multiplication_order, TokenKind::asterisk);
 	ASSERT(multiplication_has_order);
@@ -553,6 +563,39 @@ internal f32 parse_number(String string)
 	sscanf_s(buffer, "%f", &result);
 	return result;
 }
+
+internal bool32 is_name_defined(String name, Ledger* ledger)
+{
+	FOR_ELEMS(PREDEFINED_CONSTANTS)
+	{
+		if (it->name == name)
+		{
+			return true;
+		}
+	}
+
+	FOR_ELEMS(PREDEFINED_FUNCTIONS)
+	{
+		if (it->name == name)
+		{
+			return true;
+		}
+	}
+
+	FOR_ELEMS(it, ledger->statement_buffer, ledger->statement_count)
+	{
+		if (it->type == StatementType::variable_declaration && it->tree->left->token.string == name)
+		{
+			return true;
+		}
+		else if (it->type == StatementType::function_declaration && it->tree->left->left->token.string == name)
+		{
+			return true;
+		}
+	}
+
+	return false;
+};
 
 #if DEBUG
 internal void DEBUG_print_syntax_tree(SyntaxTree* tree, i32 depth = 0, u64 path = 0)
@@ -783,6 +826,16 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 							}
 						}
 
+						FOR_ELEMS(PREDEFINED_CONSTANTS)
+						{
+							if (it->name == statement->tree->token.string)
+							{
+								statement->expression.cached_evaluation = it->value.number;
+								statement->expression.is_cached         = true;
+								return;
+							}
+						}
+
 						FOR_ELEMS(it, ledger->statement_buffer, ledger->statement_count)
 						{
 							if (it->type == StatementType::variable_declaration && it->tree->left->token.string == statement->tree->token.string)
@@ -855,6 +908,35 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 						{
 							if (statement->tree->left->token.kind == TokenKind::identifier)
 							{
+								FOR_ELEMS(PREDEFINED_FUNCTIONS)
+								{
+									if (it->name == statement->tree->left->token.string)
+									{
+										FunctionArgumentNode* arguments = 0;
+										DEFER { deinit_entire_function_argument_node(ledger, arguments); };
+
+										FunctionArgumentNode** arguments_nil = &arguments;
+										for (SyntaxTree* current_parameter_tree = statement->tree->right; current_parameter_tree; current_parameter_tree = current_parameter_tree->right)
+										{
+											if (current_parameter_tree->token.kind == TokenKind::comma)
+											{
+												*arguments_nil = init_function_argument_node(ledger, {}, evaluate_expression(current_parameter_tree->left));
+											}
+											else
+											{
+												*arguments_nil = init_function_argument_node(ledger, {}, evaluate_expression(current_parameter_tree));
+												break;
+											}
+
+											arguments_nil = &(*arguments_nil)->next_node;
+										}
+
+										statement->expression.cached_evaluation = it->function(arguments).number; // @TODO@ Assumes all values are numbers.
+										statement->expression.is_cached         = true;
+										return;
+									}
+								}
+
 								FOR_ELEMS(function, ledger->statement_buffer, ledger->statement_count)
 								{
 									if (function->type == StatementType::function_declaration && function->tree->left->left->token.string == statement->tree->left->token.string)
@@ -880,7 +962,7 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 											}
 
 											current_parameter_tree = current_parameter_tree->right;
-											new_binded_args_nil = &(*new_binded_args_nil)->next_node;
+											new_binded_args_nil    = &(*new_binded_args_nil)->next_node;
 										}
 
 										ASSERT(current_function_arg == 0);
@@ -1011,11 +1093,7 @@ int main(void)
 			{
 				ASSERT(statement.tree->left->left);
 				ASSERT(statement.tree->left->left->token.kind == TokenKind::identifier);
-				FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count - 1)
-				{
-					ASSERT(it->type != StatementType::variable_declaration || it->tree->left->token.string != statement.tree->left->left->token.string);
-					ASSERT(it->type != StatementType::function_declaration || it->tree->left->left->token.string != statement.tree->left->left->token.string);
-				}
+				ASSERT(!is_name_defined(statement.tree->left->left->token.string, &ledger));
 
 				statement.type = StatementType::function_declaration;
 
@@ -1044,11 +1122,7 @@ int main(void)
 				ASSERT(statement.tree->left->token.kind == TokenKind::identifier);
 				ASSERT(!statement.tree->left->left);
 				ASSERT(!statement.tree->left->right);
-				FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count - 1)
-				{
-					ASSERT(it->type != StatementType::variable_declaration || it->tree->left->token.string != statement.tree->left->token.string);
-					ASSERT(it->type != StatementType::function_declaration || it->tree->left->left->token.string != statement.tree->left->token.string);
-				}
+				ASSERT(!is_name_defined(statement.tree->left->token.string, &ledger));
 
 				statement.type = StatementType::variable_declaration;
 			}

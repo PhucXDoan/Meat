@@ -70,10 +70,10 @@ typedef double      f64;
 
 #define IN_RANGE(X, MINI, MAXI)             ((MINI) <= (X) && (X) < (MAXI))
 #define SWAP(X, Y)                          do { auto MACRO_CONCAT_(SWAP_, __LINE__) = *(X); *(X) = *(Y); *(Y) = MACRO_CONCAT_(SWAP_, __LINE__); } while (false)
-#define KIBIBYTES_OF(N)                     (1024LL *             (N))
-#define MEBIBYTES_OF(N)                     (1024LL * KIBIBYTES_OF(N))
-#define GIBIBYTES_OF(N)                     (1024LL * MEBIBYTES_OF(N))
-#define TEBIBYTES_OF(N)                     (1024LL * GIBIBYTES_OF(N))
+#define KIBIBYTES_OF(N)                     (1024ULL *             (N))
+#define MEBIBYTES_OF(N)                     (1024ULL * KIBIBYTES_OF(N))
+#define GIBIBYTES_OF(N)                     (1024ULL * MEBIBYTES_OF(N))
+#define TEBIBYTES_OF(N)                     (1024ULL * GIBIBYTES_OF(N))
 
 #if DEBUG
 	#include <assert.h>
@@ -176,27 +176,27 @@ typedef double      f64;
 
 #define enum_loose(NAME, TYPE)\
 enum struct NAME : TYPE;\
-internal constexpr TYPE operator+  (NAME a        ) { return static_cast<TYPE>(a); }\
-internal constexpr TYPE operator<  (NAME a, NAME b) { return +a <  +b; }\
-internal constexpr TYPE operator<= (NAME a, NAME b) { return +a <= +b; }\
-internal constexpr TYPE operator>  (NAME a, NAME b) { return +a >  +b; }\
-internal constexpr TYPE operator>= (NAME a, NAME b) { return +a >= +b; }\
+internal constexpr TYPE operator+  (const NAME& a               ) { return static_cast<TYPE>(a); }\
+internal constexpr TYPE operator<  (const NAME& a, const NAME& b) { return +a <  +b; }\
+internal constexpr TYPE operator<= (const NAME& a, const NAME& b) { return +a <= +b; }\
+internal constexpr TYPE operator>  (const NAME& a, const NAME& b) { return +a >  +b; }\
+internal constexpr TYPE operator>= (const NAME& a, const NAME& b) { return +a >= +b; }\
 enum struct NAME : TYPE
 
 #define flag_struct(NAME, TYPE)\
 enum struct NAME : TYPE;\
-internal constexpr TYPE operator+  (NAME  a        ) { return     static_cast<TYPE>(a);            }\
-internal constexpr NAME operator&  (NAME  a, NAME b) { return     static_cast<NAME>( (+a) & (+b)); }\
-internal constexpr NAME operator|  (NAME  a, NAME b) { return     static_cast<NAME>( (+a) | (+b)); }\
-internal constexpr NAME operator^  (NAME  a, NAME b) { return     static_cast<NAME>( (+a) ^ (+b)); }\
-internal constexpr NAME operator<< (NAME  a, i32  n) { return     static_cast<NAME>( (+a) << n  ); }\
-internal constexpr NAME operator>> (NAME  a, i32  n) { return     static_cast<NAME>( (+a) >> n  ); }\
-internal constexpr NAME operator~  (NAME  a        ) { return     static_cast<NAME>( ~+a        ); }\
-internal constexpr NAME operator&= (NAME& a, NAME b) { return a = static_cast<NAME>( (+a) & (+b)); }\
-internal constexpr NAME operator|= (NAME& a, NAME b) { return a = static_cast<NAME>( (+a) | (+b)); }\
-internal constexpr NAME operator^= (NAME& a, NAME b) { return a = static_cast<NAME>( (+a) ^ (+b)); }\
-internal constexpr NAME operator<<=(NAME& a, i32  n) { return a = static_cast<NAME>( (+a) << n  ); }\
-internal constexpr NAME operator>>=(NAME& a, i32  n) { return a = static_cast<NAME>( (+a) >> n  ); }\
+internal constexpr TYPE operator+  (const NAME& a               ) { return     static_cast<TYPE>(a);            }\
+internal constexpr NAME operator&  (const NAME& a, const NAME& b) { return     static_cast<NAME>( (+a) & (+b)); }\
+internal constexpr NAME operator|  (const NAME& a, const NAME& b) { return     static_cast<NAME>( (+a) | (+b)); }\
+internal constexpr NAME operator^  (const NAME& a, const NAME& b) { return     static_cast<NAME>( (+a) ^ (+b)); }\
+internal constexpr NAME operator<< (const NAME& a, const i32&  n) { return     static_cast<NAME>( (+a) << n  ); }\
+internal constexpr NAME operator>> (const NAME& a, const i32&  n) { return     static_cast<NAME>( (+a) >> n  ); }\
+internal constexpr NAME operator~  (const NAME& a               ) { return     static_cast<NAME>( ~+a        ); }\
+internal constexpr NAME operator&= (      NAME& a, const NAME& b) { return a = static_cast<NAME>( (+a) & (+b)); }\
+internal constexpr NAME operator|= (      NAME& a, const NAME& b) { return a = static_cast<NAME>( (+a) | (+b)); }\
+internal constexpr NAME operator^= (      NAME& a, const NAME& b) { return a = static_cast<NAME>( (+a) ^ (+b)); }\
+internal constexpr NAME operator<<=(      NAME& a, const i32&  n) { return a = static_cast<NAME>( (+a) << n  ); }\
+internal constexpr NAME operator>>=(      NAME& a, const i32&  n) { return a = static_cast<NAME>( (+a) >> n  ); }\
 enum struct NAME : TYPE
 
 #define enum_start_region(NAME) MACRO_CONCAT_(NAME, _START), MACRO_CONCAT_(NAME, _START_) = MACRO_CONCAT_(NAME, _START) - 1,
@@ -238,7 +238,7 @@ struct MemoryArena
 };
 
 template <typename TYPE>
-internal TYPE* memory_arena_allocate(MemoryArena* arena, memsize count = 1)
+internal TYPE* memory_arena_allocate(MemoryArena* arena, const memsize& count = 1)
 {
 	ASSERT(arena->used + sizeof(TYPE) * count <= arena->size);
 	byte* allocation = arena->base + arena->used;
@@ -247,7 +247,7 @@ internal TYPE* memory_arena_allocate(MemoryArena* arena, memsize count = 1)
 }
 
 template <typename TYPE>
-internal TYPE* memory_arena_allocate_zero(MemoryArena* arena, memsize count = 1)
+internal TYPE* memory_arena_allocate_zero(MemoryArena* arena, const memsize& count = 1)
 {
 	ASSERT(arena->used + sizeof(TYPE) * count <= arena->size);
 	byte* allocation = arena->base + arena->used;
@@ -256,7 +256,7 @@ internal TYPE* memory_arena_allocate_zero(MemoryArena* arena, memsize count = 1)
 	return reinterpret_cast<TYPE*>(allocation);
 }
 
-internal MemoryArena memory_arena_reserve(MemoryArena* arena, memsize size)
+internal MemoryArena memory_arena_reserve(MemoryArena* arena, const memsize& size)
 {
 	ASSERT(arena->used + size <= arena->size);
 	MemoryArena reservation;
@@ -310,51 +310,51 @@ struct vf4
 	};
 };
 
-internal constexpr bool32 operator+ (vf2  v       ) { return v.x || v.y;               }
-internal constexpr bool32 operator+ (vf3  v       ) { return v.x || v.y || v.z;        }
-internal constexpr bool32 operator+ (vf4  v       ) { return v.x || v.y || v.z || v.w; }
-internal constexpr vf2    operator- (vf2  v       ) { return { -v.x, -v.y             }; }
-internal constexpr vf3    operator- (vf3  v       ) { return { -v.x, -v.y, -v.z       }; }
-internal constexpr vf4    operator- (vf4  v       ) { return { -v.x, -v.y, -v.z, -v.w }; }
-internal constexpr bool32 operator==(vf2  u, vf2 v) { return u.x == v.x && u.y == v.y;                             }
-internal constexpr bool32 operator==(vf3  u, vf3 v) { return u.x == v.x && u.y == v.y && u.z == v.z;               }
-internal constexpr bool32 operator==(vf4  u, vf4 v) { return u.x == v.x && u.y == v.y && u.z == v.z && u.w == v.w; }
-internal constexpr bool32 operator!=(vf2  u, vf2 v) { return !(u == v); }
-internal constexpr bool32 operator!=(vf3  u, vf3 v) { return !(u == v); }
-internal constexpr bool32 operator!=(vf4  u, vf4 v) { return !(u == v); }
-internal constexpr vf2    operator+ (vf2  u, vf2 v) { return { u.x + v.x, u.y + v.y                       }; }
-internal constexpr vf3    operator+ (vf3  u, vf3 v) { return { u.x + v.x, u.y + v.y, u.z + v.z            }; }
-internal constexpr vf4    operator+ (vf4  u, vf4 v) { return { u.x + v.x, u.y + v.y, u.z + v.z, u.w + v.w }; }
-internal constexpr vf2    operator- (vf2  u, vf2 v) { return { u.x - v.x, u.y - v.y                       }; }
-internal constexpr vf3    operator- (vf3  u, vf3 v) { return { u.x - v.x, u.y - v.y, u.z - v.z            }; }
-internal constexpr vf4    operator- (vf4  u, vf4 v) { return { u.x - v.x, u.y - v.y, u.z - v.z, u.w - v.w }; }
-internal constexpr vf2    operator/ (vf2  v, f32 k) { return { v.x / k, v.y / k                   }; }
-internal constexpr vf3    operator/ (vf3  v, f32 k) { return { v.x / k, v.y / k, v.z / k          }; }
-internal constexpr vf4    operator/ (vf4  v, f32 k) { return { v.x / k, v.y / k, v.z / k, v.w / k }; }
-internal constexpr vf2    operator* (vf2  u, vf2 v) { return { u.x * v.x, u.y * v.y                       }; }
-internal constexpr vf3    operator* (vf3  u, vf3 v) { return { u.x * v.x, u.y * v.y, u.z * v.z            }; }
-internal constexpr vf4    operator* (vf4  u, vf4 v) { return { u.x * v.x, u.y * v.y, u.z * v.z, u.w * v.w }; }
-internal constexpr vf2    operator* (vf2  v, f32 k) { return { v.x * k, v.y * k                   }; }
-internal constexpr vf3    operator* (vf3  v, f32 k) { return { v.x * k, v.y * k, v.z * k          }; }
-internal constexpr vf4    operator* (vf4  v, f32 k) { return { v.x * k, v.y * k, v.z * k, v.w * k }; }
-internal constexpr vf2    operator* (f32  k, vf2 v) { return v * k; }
-internal constexpr vf3    operator* (f32  k, vf3 v) { return v * k; }
-internal constexpr vf4    operator* (f32  k, vf4 v) { return v * k; }
-internal constexpr vf2&   operator+=(vf2& u, vf2 v) { return u = u + v; }
-internal constexpr vf3&   operator+=(vf3& u, vf3 v) { return u = u + v; }
-internal constexpr vf4&   operator+=(vf4& u, vf4 v) { return u = u + v; }
-internal constexpr vf2&   operator-=(vf2& u, vf2 v) { return u = u - v; }
-internal constexpr vf3&   operator-=(vf3& u, vf3 v) { return u = u - v; }
-internal constexpr vf4&   operator-=(vf4& u, vf4 v) { return u = u - v; }
-internal constexpr vf2&   operator*=(vf2& u, vf2 v) { return u = u * v; }
-internal constexpr vf3&   operator*=(vf3& u, vf3 v) { return u = u * v; }
-internal constexpr vf4&   operator*=(vf4& u, vf4 v) { return u = u * v; }
-internal constexpr vf2&   operator*=(vf2& v, f32 k) { return v = v * k; }
-internal constexpr vf3&   operator*=(vf3& v, f32 k) { return v = v * k; }
-internal constexpr vf4&   operator*=(vf4& v, f32 k) { return v = v * k; }
-internal constexpr vf2&   operator/=(vf2& v, f32 k) { return v = v / k; }
-internal constexpr vf3&   operator/=(vf3& v, f32 k) { return v = v / k; }
-internal constexpr vf4&   operator/=(vf4& v, f32 k) { return v = v / k; }
+internal constexpr bool32 operator+ (const vf2& v              ) { return v.x || v.y;               }
+internal constexpr bool32 operator+ (const vf3& v              ) { return v.x || v.y || v.z;        }
+internal constexpr bool32 operator+ (const vf4& v              ) { return v.x || v.y || v.z || v.w; }
+internal constexpr vf2    operator- (const vf2& v              ) { return { -v.x, -v.y             }; }
+internal constexpr vf3    operator- (const vf3& v              ) { return { -v.x, -v.y, -v.z       }; }
+internal constexpr vf4    operator- (const vf4& v              ) { return { -v.x, -v.y, -v.z, -v.w }; }
+internal constexpr bool32 operator==(const vf2& u, const vf2& v) { return u.x == v.x && u.y == v.y;                             }
+internal constexpr bool32 operator==(const vf3& u, const vf3& v) { return u.x == v.x && u.y == v.y && u.z == v.z;               }
+internal constexpr bool32 operator==(const vf4& u, const vf4& v) { return u.x == v.x && u.y == v.y && u.z == v.z && u.w == v.w; }
+internal constexpr bool32 operator!=(const vf2& u, const vf2& v) { return !(u == v); }
+internal constexpr bool32 operator!=(const vf3& u, const vf3& v) { return !(u == v); }
+internal constexpr bool32 operator!=(const vf4& u, const vf4& v) { return !(u == v); }
+internal constexpr vf2    operator+ (const vf2& u, const vf2& v) { return { u.x + v.x, u.y + v.y                       }; }
+internal constexpr vf3    operator+ (const vf3& u, const vf3& v) { return { u.x + v.x, u.y + v.y, u.z + v.z            }; }
+internal constexpr vf4    operator+ (const vf4& u, const vf4& v) { return { u.x + v.x, u.y + v.y, u.z + v.z, u.w + v.w }; }
+internal constexpr vf2    operator- (const vf2& u, const vf2& v) { return { u.x - v.x, u.y - v.y                       }; }
+internal constexpr vf3    operator- (const vf3& u, const vf3& v) { return { u.x - v.x, u.y - v.y, u.z - v.z            }; }
+internal constexpr vf4    operator- (const vf4& u, const vf4& v) { return { u.x - v.x, u.y - v.y, u.z - v.z, u.w - v.w }; }
+internal constexpr vf2    operator/ (const vf2& v, const f32& k) { return { v.x / k, v.y / k                   }; }
+internal constexpr vf3    operator/ (const vf3& v, const f32& k) { return { v.x / k, v.y / k, v.z / k          }; }
+internal constexpr vf4    operator/ (const vf4& v, const f32& k) { return { v.x / k, v.y / k, v.z / k, v.w / k }; }
+internal constexpr vf2    operator* (const vf2& u, const vf2& v) { return { u.x * v.x, u.y * v.y                       }; }
+internal constexpr vf3    operator* (const vf3& u, const vf3& v) { return { u.x * v.x, u.y * v.y, u.z * v.z            }; }
+internal constexpr vf4    operator* (const vf4& u, const vf4& v) { return { u.x * v.x, u.y * v.y, u.z * v.z, u.w * v.w }; }
+internal constexpr vf2    operator* (const vf2& v, const f32& k) { return { v.x * k, v.y * k                   }; }
+internal constexpr vf3    operator* (const vf3& v, const f32& k) { return { v.x * k, v.y * k, v.z * k          }; }
+internal constexpr vf4    operator* (const vf4& v, const f32& k) { return { v.x * k, v.y * k, v.z * k, v.w * k }; }
+internal constexpr vf2    operator* (const f32& k, const vf2& v) { return v * k; }
+internal constexpr vf3    operator* (const f32& k, const vf3& v) { return v * k; }
+internal constexpr vf4    operator* (const f32& k, const vf4& v) { return v * k; }
+internal constexpr vf2&   operator+=(      vf2& u, const vf2& v) { return u = u + v; }
+internal constexpr vf3&   operator+=(      vf3& u, const vf3& v) { return u = u + v; }
+internal constexpr vf4&   operator+=(      vf4& u, const vf4& v) { return u = u + v; }
+internal constexpr vf2&   operator-=(      vf2& u, const vf2& v) { return u = u - v; }
+internal constexpr vf3&   operator-=(      vf3& u, const vf3& v) { return u = u - v; }
+internal constexpr vf4&   operator-=(      vf4& u, const vf4& v) { return u = u - v; }
+internal constexpr vf2&   operator*=(      vf2& u, const vf2& v) { return u = u * v; }
+internal constexpr vf3&   operator*=(      vf3& u, const vf3& v) { return u = u * v; }
+internal constexpr vf4&   operator*=(      vf4& u, const vf4& v) { return u = u * v; }
+internal constexpr vf2&   operator*=(      vf2& v, const f32& k) { return v = v * k; }
+internal constexpr vf3&   operator*=(      vf3& v, const f32& k) { return v = v * k; }
+internal constexpr vf4&   operator*=(      vf4& v, const f32& k) { return v = v * k; }
+internal constexpr vf2&   operator/=(      vf2& v, const f32& k) { return v = v / k; }
+internal constexpr vf3&   operator/=(      vf3& v, const f32& k) { return v = v / k; }
+internal constexpr vf4&   operator/=(      vf4& v, const f32& k) { return v = v / k; }
 
 struct vi2
 {
@@ -386,171 +386,171 @@ struct vi4
 	};
 };
 
-internal constexpr bool32 operator+ (vi2  v       ) { return v.x || v.y;               }
-internal constexpr bool32 operator+ (vi3  v       ) { return v.x || v.y || v.z;        }
-internal constexpr bool32 operator+ (vi4  v       ) { return v.x || v.y || v.z || v.w; }
-internal constexpr vi2    operator- (vi2  v       ) { return { -v.x, -v.y             }; }
-internal constexpr vi3    operator- (vi3  v       ) { return { -v.x, -v.y, -v.z       }; }
-internal constexpr vi4    operator- (vi4  v       ) { return { -v.x, -v.y, -v.z, -v.w }; }
-internal constexpr bool32 operator==(vi2  u, vi2 v) { return u.x == v.x && u.y == v.y;                             }
-internal constexpr bool32 operator==(vi3  u, vi3 v) { return u.x == v.x && u.y == v.y && u.z == v.z;               }
-internal constexpr bool32 operator==(vi4  u, vi4 v) { return u.x == v.x && u.y == v.y && u.z == v.z && u.w == v.w; }
-internal constexpr bool32 operator!=(vi2  u, vi2 v) { return !(u == v); }
-internal constexpr bool32 operator!=(vi3  u, vi3 v) { return !(u == v); }
-internal constexpr bool32 operator!=(vi4  u, vi4 v) { return !(u == v); }
-internal constexpr vi2    operator+ (vi2  u, vi2 v) { return { u.x + v.x, u.y + v.y                       }; }
-internal constexpr vi3    operator+ (vi3  u, vi3 v) { return { u.x + v.x, u.y + v.y, u.z + v.z            }; }
-internal constexpr vi4    operator+ (vi4  u, vi4 v) { return { u.x + v.x, u.y + v.y, u.z + v.z, u.w + v.w }; }
-internal constexpr vi2    operator- (vi2  u, vi2 v) { return { u.x - v.x, u.y - v.y                       }; }
-internal constexpr vi3    operator- (vi3  u, vi3 v) { return { u.x - v.x, u.y - v.y, u.z - v.z            }; }
-internal constexpr vi4    operator- (vi4  u, vi4 v) { return { u.x - v.x, u.y - v.y, u.z - v.z, u.w - v.w }; }
-internal constexpr vi2    operator/ (vi2  v, i32 k) { return { v.x / k, v.y / k                   }; }
-internal constexpr vi3    operator/ (vi3  v, i32 k) { return { v.x / k, v.y / k, v.z / k          }; }
-internal constexpr vi4    operator/ (vi4  v, i32 k) { return { v.x / k, v.y / k, v.z / k, v.w / k }; }
-internal constexpr vi2    operator* (vi2  u, vi2 v) { return { u.x * v.x, u.y * v.y                       }; }
-internal constexpr vi3    operator* (vi3  u, vi3 v) { return { u.x * v.x, u.y * v.y, u.z * v.z            }; }
-internal constexpr vi4    operator* (vi4  u, vi4 v) { return { u.x * v.x, u.y * v.y, u.z * v.z, u.w * v.w }; }
-internal constexpr vi2    operator* (vi2  v, i32 k) { return { v.x * k, v.y * k                   }; }
-internal constexpr vi3    operator* (vi3  v, i32 k) { return { v.x * k, v.y * k, v.z * k          }; }
-internal constexpr vi4    operator* (vi4  v, i32 k) { return { v.x * k, v.y * k, v.z * k, v.w * k }; }
-internal constexpr vi2    operator* (i32  k, vi2 v) { return v * k; }
-internal constexpr vi3    operator* (i32  k, vi3 v) { return v * k; }
-internal constexpr vi4    operator* (i32  k, vi4 v) { return v * k; }
-internal constexpr vi2&   operator+=(vi2& u, vi2 v) { return u = u + v; }
-internal constexpr vi3&   operator+=(vi3& u, vi3 v) { return u = u + v; }
-internal constexpr vi4&   operator+=(vi4& u, vi4 v) { return u = u + v; }
-internal constexpr vi2&   operator-=(vi2& u, vi2 v) { return u = u - v; }
-internal constexpr vi3&   operator-=(vi3& u, vi3 v) { return u = u - v; }
-internal constexpr vi4&   operator-=(vi4& u, vi4 v) { return u = u - v; }
-internal constexpr vi2&   operator*=(vi2& u, vi2 v) { return u = u * v; }
-internal constexpr vi3&   operator*=(vi3& u, vi3 v) { return u = u * v; }
-internal constexpr vi4&   operator*=(vi4& u, vi4 v) { return u = u * v; }
-internal constexpr vi2&   operator*=(vi2& v, i32 k) { return v = v * k; }
-internal constexpr vi3&   operator*=(vi3& v, i32 k) { return v = v * k; }
-internal constexpr vi4&   operator*=(vi4& v, i32 k) { return v = v * k; }
-internal constexpr vi2&   operator/=(vi2& v, i32 k) { return v = v / k; }
-internal constexpr vi3&   operator/=(vi3& v, i32 k) { return v = v / k; }
-internal constexpr vi4&   operator/=(vi4& v, i32 k) { return v = v / k; }
+internal constexpr bool32 operator+ (const vi2& v              ) { return v.x || v.y;               }
+internal constexpr bool32 operator+ (const vi3& v              ) { return v.x || v.y || v.z;        }
+internal constexpr bool32 operator+ (const vi4& v              ) { return v.x || v.y || v.z || v.w; }
+internal constexpr vi2    operator- (const vi2& v              ) { return { -v.x, -v.y             }; }
+internal constexpr vi3    operator- (const vi3& v              ) { return { -v.x, -v.y, -v.z       }; }
+internal constexpr vi4    operator- (const vi4& v              ) { return { -v.x, -v.y, -v.z, -v.w }; }
+internal constexpr bool32 operator==(const vi2& u, const vi2& v) { return u.x == v.x && u.y == v.y;                             }
+internal constexpr bool32 operator==(const vi3& u, const vi3& v) { return u.x == v.x && u.y == v.y && u.z == v.z;               }
+internal constexpr bool32 operator==(const vi4& u, const vi4& v) { return u.x == v.x && u.y == v.y && u.z == v.z && u.w == v.w; }
+internal constexpr bool32 operator!=(const vi2& u, const vi2& v) { return !(u == v); }
+internal constexpr bool32 operator!=(const vi3& u, const vi3& v) { return !(u == v); }
+internal constexpr bool32 operator!=(const vi4& u, const vi4& v) { return !(u == v); }
+internal constexpr vi2    operator+ (const vi2& u, const vi2& v) { return { u.x + v.x, u.y + v.y                       }; }
+internal constexpr vi3    operator+ (const vi3& u, const vi3& v) { return { u.x + v.x, u.y + v.y, u.z + v.z            }; }
+internal constexpr vi4    operator+ (const vi4& u, const vi4& v) { return { u.x + v.x, u.y + v.y, u.z + v.z, u.w + v.w }; }
+internal constexpr vi2    operator- (const vi2& u, const vi2& v) { return { u.x - v.x, u.y - v.y                       }; }
+internal constexpr vi3    operator- (const vi3& u, const vi3& v) { return { u.x - v.x, u.y - v.y, u.z - v.z            }; }
+internal constexpr vi4    operator- (const vi4& u, const vi4& v) { return { u.x - v.x, u.y - v.y, u.z - v.z, u.w - v.w }; }
+internal constexpr vi2    operator/ (const vi2& v, const i32& k) { return { v.x / k, v.y / k                   }; }
+internal constexpr vi3    operator/ (const vi3& v, const i32& k) { return { v.x / k, v.y / k, v.z / k          }; }
+internal constexpr vi4    operator/ (const vi4& v, const i32& k) { return { v.x / k, v.y / k, v.z / k, v.w / k }; }
+internal constexpr vi2    operator* (const vi2& u, const vi2& v) { return { u.x * v.x, u.y * v.y                       }; }
+internal constexpr vi3    operator* (const vi3& u, const vi3& v) { return { u.x * v.x, u.y * v.y, u.z * v.z            }; }
+internal constexpr vi4    operator* (const vi4& u, const vi4& v) { return { u.x * v.x, u.y * v.y, u.z * v.z, u.w * v.w }; }
+internal constexpr vi2    operator* (const vi2& v, const i32& k) { return { v.x * k, v.y * k                   }; }
+internal constexpr vi3    operator* (const vi3& v, const i32& k) { return { v.x * k, v.y * k, v.z * k          }; }
+internal constexpr vi4    operator* (const vi4& v, const i32& k) { return { v.x * k, v.y * k, v.z * k, v.w * k }; }
+internal constexpr vi2    operator* (const i32& k, const vi2& v) { return v * k; }
+internal constexpr vi3    operator* (const i32& k, const vi3& v) { return v * k; }
+internal constexpr vi4    operator* (const i32& k, const vi4& v) { return v * k; }
+internal constexpr vi2&   operator+=(      vi2& u, const vi2& v) { return u = u + v; }
+internal constexpr vi3&   operator+=(      vi3& u, const vi3& v) { return u = u + v; }
+internal constexpr vi4&   operator+=(      vi4& u, const vi4& v) { return u = u + v; }
+internal constexpr vi2&   operator-=(      vi2& u, const vi2& v) { return u = u - v; }
+internal constexpr vi3&   operator-=(      vi3& u, const vi3& v) { return u = u - v; }
+internal constexpr vi4&   operator-=(      vi4& u, const vi4& v) { return u = u - v; }
+internal constexpr vi2&   operator*=(      vi2& u, const vi2& v) { return u = u * v; }
+internal constexpr vi3&   operator*=(      vi3& u, const vi3& v) { return u = u * v; }
+internal constexpr vi4&   operator*=(      vi4& u, const vi4& v) { return u = u * v; }
+internal constexpr vi2&   operator*=(      vi2& v, const i32& k) { return v = v * k; }
+internal constexpr vi3&   operator*=(      vi3& v, const i32& k) { return v = v * k; }
+internal constexpr vi4&   operator*=(      vi4& v, const i32& k) { return v = v * k; }
+internal constexpr vi2&   operator/=(      vi2& v, const i32& k) { return v = v / k; }
+internal constexpr vi3&   operator/=(      vi3& v, const i32& k) { return v = v / k; }
+internal constexpr vi4&   operator/=(      vi4& v, const i32& k) { return v = v / k; }
 
-internal constexpr vf2    operator+ (vf2  u, vi2 v) { return { u.x + static_cast<f32>(v.x), u.y + static_cast<f32>(v.y)                                                           }; }
-internal constexpr vf3    operator+ (vf3  u, vi3 v) { return { u.x + static_cast<f32>(v.x), u.y + static_cast<f32>(v.y), u.z + static_cast<f32>(v.z)                              }; }
-internal constexpr vf4    operator+ (vf4  u, vi4 v) { return { u.x + static_cast<f32>(v.x), u.y + static_cast<f32>(v.y), u.z + static_cast<f32>(v.z), u.w + static_cast<f32>(v.w) }; }
-internal constexpr vf2    operator+ (vi2  u, vf2 v) { return v + u; }
-internal constexpr vf3    operator+ (vi3  u, vf3 v) { return v + u; }
-internal constexpr vf4    operator+ (vi4  u, vf4 v) { return v + u; }
-internal constexpr vf2    operator- (vf2  u, vi2 v) { return { u.x - static_cast<f32>(v.x), u.y - static_cast<f32>(v.y)                                                           }; }
-internal constexpr vf3    operator- (vf3  u, vi3 v) { return { u.x - static_cast<f32>(v.x), u.y - static_cast<f32>(v.y), u.z - static_cast<f32>(v.z)                              }; }
-internal constexpr vf4    operator- (vf4  u, vi4 v) { return { u.x - static_cast<f32>(v.x), u.y - static_cast<f32>(v.y), u.z - static_cast<f32>(v.z), u.w - static_cast<f32>(v.w) }; }
-internal constexpr vf2    operator- (vi2  u, vf2 v) { return { static_cast<f32>(u.x) - v.x, static_cast<f32>(u.y) - v.y                                                           }; }
-internal constexpr vf3    operator- (vi3  u, vf3 v) { return { static_cast<f32>(u.x) - v.x, static_cast<f32>(u.y) - v.y, static_cast<f32>(u.z) - v.z                              }; }
-internal constexpr vf4    operator- (vi4  u, vf4 v) { return { static_cast<f32>(u.x) - v.x, static_cast<f32>(u.y) - v.y, static_cast<f32>(u.z) - v.z, static_cast<f32>(u.w) - v.w }; }
-internal constexpr vf2    operator/ (vf2  v, i32 k) { return { v.x / k, v.y / k                   }; }
-internal constexpr vf3    operator/ (vf3  v, i32 k) { return { v.x / k, v.y / k, v.z / k          }; }
-internal constexpr vf4    operator/ (vf4  v, i32 k) { return { v.x / k, v.y / k, v.z / k, v.w / k }; }
-internal constexpr vf2    operator/ (vi2  v, f32 k) { return { v.x / k, v.y / k                   }; }
-internal constexpr vf3    operator/ (vi3  v, f32 k) { return { v.x / k, v.y / k, v.z / k          }; }
-internal constexpr vf4    operator/ (vi4  v, f32 k) { return { v.x / k, v.y / k, v.z / k, v.w / k }; }
-internal constexpr vf2    operator* (vf2  u, vi2 v) { return { u.x * v.x, u.y * v.y                       }; }
-internal constexpr vf3    operator* (vf3  u, vi3 v) { return { u.x * v.x, u.y * v.y, u.z * v.z            }; }
-internal constexpr vf4    operator* (vf4  u, vi4 v) { return { u.x * v.x, u.y * v.y, u.z * v.z, u.w * v.w }; }
-internal constexpr vf2    operator* (vi2  u, vf2 v) { return { u.x * v.x, u.y * v.y                       }; }
-internal constexpr vf3    operator* (vi3  u, vf3 v) { return { u.x * v.x, u.y * v.y, u.z * v.z            }; }
-internal constexpr vf4    operator* (vi4  u, vf4 v) { return { u.x * v.x, u.y * v.y, u.z * v.z, u.w * v.w }; }
-internal constexpr vf2    operator* (vf2  v, i32 k) { return { v.x * k, v.y * k                   }; }
-internal constexpr vf3    operator* (vf3  v, i32 k) { return { v.x * k, v.y * k, v.z * k          }; }
-internal constexpr vf4    operator* (vf4  v, i32 k) { return { v.x * k, v.y * k, v.z * k, v.w * k }; }
-internal constexpr vf2    operator* (vi2  v, f32 k) { return { v.x * k, v.y * k                   }; }
-internal constexpr vf3    operator* (vi3  v, f32 k) { return { v.x * k, v.y * k, v.z * k          }; }
-internal constexpr vf4    operator* (vi4  v, f32 k) { return { v.x * k, v.y * k, v.z * k, v.w * k }; }
-internal constexpr vf2    operator* (f32  k, vi2 v) { return v * k; }
-internal constexpr vf3    operator* (f32  k, vi3 v) { return v * k; }
-internal constexpr vf4    operator* (f32  k, vi4 v) { return v * k; }
-internal constexpr vf2&   operator+=(vf2& u, vi2 v) { return u = u + v; }
-internal constexpr vf3&   operator+=(vf3& u, vi3 v) { return u = u + v; }
-internal constexpr vf4&   operator+=(vf4& u, vi4 v) { return u = u + v; }
-internal constexpr vf2&   operator-=(vf2& u, vi2 v) { return u = u - v; }
-internal constexpr vf3&   operator-=(vf3& u, vi3 v) { return u = u - v; }
-internal constexpr vf4&   operator-=(vf4& u, vi4 v) { return u = u - v; }
-internal constexpr vf2&   operator*=(vf2& u, vi2 v) { return u = u * v; }
-internal constexpr vf3&   operator*=(vf3& u, vi3 v) { return u = u * v; }
-internal constexpr vf4&   operator*=(vf4& u, vi4 v) { return u = u * v; }
-internal constexpr vf2&   operator*=(vf2& v, i32 k) { return v = v * k; }
-internal constexpr vf3&   operator*=(vf3& v, i32 k) { return v = v * k; }
-internal constexpr vf4&   operator*=(vf4& v, i32 k) { return v = v * k; }
-internal constexpr vf2&   operator/=(vf2& v, i32 k) { return v = v / k; }
-internal constexpr vf3&   operator/=(vf3& v, i32 k) { return v = v / k; }
-internal constexpr vf4&   operator/=(vf4& v, i32 k) { return v = v / k; }
+internal constexpr vf2    operator+ (const vf2& u, const vi2& v) { return { u.x + static_cast<f32>(v.x), u.y + static_cast<f32>(v.y)                                                           }; }
+internal constexpr vf3    operator+ (const vf3& u, const vi3& v) { return { u.x + static_cast<f32>(v.x), u.y + static_cast<f32>(v.y), u.z + static_cast<f32>(v.z)                              }; }
+internal constexpr vf4    operator+ (const vf4& u, const vi4& v) { return { u.x + static_cast<f32>(v.x), u.y + static_cast<f32>(v.y), u.z + static_cast<f32>(v.z), u.w + static_cast<f32>(v.w) }; }
+internal constexpr vf2    operator+ (const vi2& u, const vf2& v) { return v + u; }
+internal constexpr vf3    operator+ (const vi3& u, const vf3& v) { return v + u; }
+internal constexpr vf4    operator+ (const vi4& u, const vf4& v) { return v + u; }
+internal constexpr vf2    operator- (const vf2& u, const vi2& v) { return { u.x - static_cast<f32>(v.x), u.y - static_cast<f32>(v.y)                                                           }; }
+internal constexpr vf3    operator- (const vf3& u, const vi3& v) { return { u.x - static_cast<f32>(v.x), u.y - static_cast<f32>(v.y), u.z - static_cast<f32>(v.z)                              }; }
+internal constexpr vf4    operator- (const vf4& u, const vi4& v) { return { u.x - static_cast<f32>(v.x), u.y - static_cast<f32>(v.y), u.z - static_cast<f32>(v.z), u.w - static_cast<f32>(v.w) }; }
+internal constexpr vf2    operator- (const vi2& u, const vf2& v) { return { static_cast<f32>(u.x) - v.x, static_cast<f32>(u.y) - v.y                                                           }; }
+internal constexpr vf3    operator- (const vi3& u, const vf3& v) { return { static_cast<f32>(u.x) - v.x, static_cast<f32>(u.y) - v.y, static_cast<f32>(u.z) - v.z                              }; }
+internal constexpr vf4    operator- (const vi4& u, const vf4& v) { return { static_cast<f32>(u.x) - v.x, static_cast<f32>(u.y) - v.y, static_cast<f32>(u.z) - v.z, static_cast<f32>(u.w) - v.w }; }
+internal constexpr vf2    operator/ (const vf2& v, const i32& k) { return { v.x / k, v.y / k                   }; }
+internal constexpr vf3    operator/ (const vf3& v, const i32& k) { return { v.x / k, v.y / k, v.z / k          }; }
+internal constexpr vf4    operator/ (const vf4& v, const i32& k) { return { v.x / k, v.y / k, v.z / k, v.w / k }; }
+internal constexpr vf2    operator/ (const vi2& v, const f32& k) { return { v.x / k, v.y / k                   }; }
+internal constexpr vf3    operator/ (const vi3& v, const f32& k) { return { v.x / k, v.y / k, v.z / k          }; }
+internal constexpr vf4    operator/ (const vi4& v, const f32& k) { return { v.x / k, v.y / k, v.z / k, v.w / k }; }
+internal constexpr vf2    operator* (const vf2& u, const vi2& v) { return { u.x * v.x, u.y * v.y                       }; }
+internal constexpr vf3    operator* (const vf3& u, const vi3& v) { return { u.x * v.x, u.y * v.y, u.z * v.z            }; }
+internal constexpr vf4    operator* (const vf4& u, const vi4& v) { return { u.x * v.x, u.y * v.y, u.z * v.z, u.w * v.w }; }
+internal constexpr vf2    operator* (const vi2& u, const vf2& v) { return { u.x * v.x, u.y * v.y                       }; }
+internal constexpr vf3    operator* (const vi3& u, const vf3& v) { return { u.x * v.x, u.y * v.y, u.z * v.z            }; }
+internal constexpr vf4    operator* (const vi4& u, const vf4& v) { return { u.x * v.x, u.y * v.y, u.z * v.z, u.w * v.w }; }
+internal constexpr vf2    operator* (const vf2& v, const i32& k) { return { v.x * k, v.y * k                   }; }
+internal constexpr vf3    operator* (const vf3& v, const i32& k) { return { v.x * k, v.y * k, v.z * k          }; }
+internal constexpr vf4    operator* (const vf4& v, const i32& k) { return { v.x * k, v.y * k, v.z * k, v.w * k }; }
+internal constexpr vf2    operator* (const vi2& v, const f32& k) { return { v.x * k, v.y * k                   }; }
+internal constexpr vf3    operator* (const vi3& v, const f32& k) { return { v.x * k, v.y * k, v.z * k          }; }
+internal constexpr vf4    operator* (const vi4& v, const f32& k) { return { v.x * k, v.y * k, v.z * k, v.w * k }; }
+internal constexpr vf2    operator* (const f32& k, const vi2& v) { return v * k; }
+internal constexpr vf3    operator* (const f32& k, const vi3& v) { return v * k; }
+internal constexpr vf4    operator* (const f32& k, const vi4& v) { return v * k; }
+internal constexpr vf2&   operator+=(      vf2& u, const vi2& v) { return u = u + v; }
+internal constexpr vf3&   operator+=(      vf3& u, const vi3& v) { return u = u + v; }
+internal constexpr vf4&   operator+=(      vf4& u, const vi4& v) { return u = u + v; }
+internal constexpr vf2&   operator-=(      vf2& u, const vi2& v) { return u = u - v; }
+internal constexpr vf3&   operator-=(      vf3& u, const vi3& v) { return u = u - v; }
+internal constexpr vf4&   operator-=(      vf4& u, const vi4& v) { return u = u - v; }
+internal constexpr vf2&   operator*=(      vf2& u, const vi2& v) { return u = u * v; }
+internal constexpr vf3&   operator*=(      vf3& u, const vi3& v) { return u = u * v; }
+internal constexpr vf4&   operator*=(      vf4& u, const vi4& v) { return u = u * v; }
+internal constexpr vf2&   operator*=(      vf2& v, const i32& k) { return v = v * k; }
+internal constexpr vf3&   operator*=(      vf3& v, const i32& k) { return v = v * k; }
+internal constexpr vf4&   operator*=(      vf4& v, const i32& k) { return v = v * k; }
+internal constexpr vf2&   operator/=(      vf2& v, const i32& k) { return v = v / k; }
+internal constexpr vf3&   operator/=(      vf3& v, const i32& k) { return v = v / k; }
+internal constexpr vf4&   operator/=(      vf4& v, const i32& k) { return v = v / k; }
 
-internal constexpr vf2    vxx(vi2 v              ) { return { static_cast<f32>(v.x), static_cast<f32>(v.y)                                               }; }
-internal constexpr vi2    vxx(vf2 v              ) { return { static_cast<i32>(v.x), static_cast<i32>(v.y)                                               }; }
-internal constexpr vf3    vxx(vi3 v              ) { return { static_cast<f32>(v.x), static_cast<f32>(v.y), static_cast<f32>(v.z)                        }; }
-internal constexpr vi3    vxx(vf3 v              ) { return { static_cast<i32>(v.x), static_cast<i32>(v.y), static_cast<i32>(v.z)                        }; }
-internal constexpr vf4    vxx(vi4 v              ) { return { static_cast<f32>(v.x), static_cast<f32>(v.y), static_cast<f32>(v.z), static_cast<f32>(v.w) }; }
-internal constexpr vi4    vxx(vf4 v              ) { return { static_cast<i32>(v.x), static_cast<i32>(v.y), static_cast<i32>(v.z), static_cast<i32>(v.w) }; }
-internal constexpr vf3    vxx(vf2 v, f32 a       ) { return { v.x, v.y,   a    }; }
-internal constexpr vf4    vxx(vf2 v, f32 a, f32 b) { return { v.x, v.y,   a, b }; }
-internal constexpr vf4    vxx(vf3 v, f32 a       ) { return { v.x, v.y, v.z, a }; }
+internal constexpr vf2    vxx(const vi2& v                            ) { return { static_cast<f32>(v.x), static_cast<f32>(v.y)                                               }; }
+internal constexpr vi2    vxx(const vf2& v                            ) { return { static_cast<i32>(v.x), static_cast<i32>(v.y)                                               }; }
+internal constexpr vf3    vxx(const vi3& v                            ) { return { static_cast<f32>(v.x), static_cast<f32>(v.y), static_cast<f32>(v.z)                        }; }
+internal constexpr vi3    vxx(const vf3& v                            ) { return { static_cast<i32>(v.x), static_cast<i32>(v.y), static_cast<i32>(v.z)                        }; }
+internal constexpr vf4    vxx(const vi4& v                            ) { return { static_cast<f32>(v.x), static_cast<f32>(v.y), static_cast<f32>(v.z), static_cast<f32>(v.w) }; }
+internal constexpr vi4    vxx(const vf4& v                            ) { return { static_cast<i32>(v.x), static_cast<i32>(v.y), static_cast<i32>(v.z), static_cast<i32>(v.w) }; }
+internal constexpr vf3    vxx(const vf2& v, const f32& a              ) { return { v.x, v.y,   a    }; }
+internal constexpr vf4    vxx(const vf2& v, const f32& a, const f32& b) { return { v.x, v.y,   a, b }; }
+internal constexpr vf4    vxx(const vf3& v, const f32& a              ) { return { v.x, v.y, v.z, a }; }
 
-internal constexpr vf2    vx2(f32 a) { return {   a,   a           }; }
-internal constexpr vi2    vx2(i32 a) { return {   a,   a           }; }
-internal constexpr vf3    vx3(f32 a) { return {   a,   a,   a      }; }
-internal constexpr vi3    vx3(i32 a) { return {   a,   a,   a      }; }
-internal constexpr vf4    vx4(f32 a) { return {   a,   a,   a,   a }; }
-internal constexpr vi4    vx4(i32 a) { return {   a,   a,   a,   a }; }
+internal constexpr vf2    vx2(const f32& a) { return { a, a       }; }
+internal constexpr vi2    vx2(const i32& a) { return { a, a       }; }
+internal constexpr vf3    vx3(const f32& a) { return { a, a, a    }; }
+internal constexpr vi3    vx3(const i32& a) { return { a, a, a    }; }
+internal constexpr vf4    vx4(const f32& a) { return { a, a, a, a }; }
+internal constexpr vi4    vx4(const i32& a) { return { a, a, a, a }; }
 
 template <typename TYPE>
-i32 sign(TYPE x)
+i32 sign(const TYPE& x)
 {
 	return (static_cast<TYPE>(0) < x) - (x < static_cast<TYPE>(0));
 }
 
-internal constexpr f32 square(f32 x) { return x * x;     }
-internal constexpr f32 cube  (f32 x) { return x * x * x; }
+internal constexpr f32 square(const f32& x) { return x * x;     }
+internal constexpr f32 cube  (const f32& x) { return x * x * x; }
 
-internal constexpr vf4 lerp(vf4 a, vf4 b, f32 t) { return a * (1.0f - t) + b * t; }
-internal constexpr vf3 lerp(vf3 a, vf3 b, f32 t) { return a * (1.0f - t) + b * t; }
-internal constexpr vf2 lerp(vf2 a, vf2 b, f32 t) { return a * (1.0f - t) + b * t; }
-internal constexpr f32 lerp(f32 a, f32 b, f32 t) { return a * (1.0f - t) + b * t; }
+internal constexpr vf4 lerp(const vf4& a, const vf4& b, const f32& t) { return a * (1.0f - t) + b * t; }
+internal constexpr vf3 lerp(const vf3& a, const vf3& b, const f32& t) { return a * (1.0f - t) + b * t; }
+internal constexpr vf2 lerp(const vf2& a, const vf2& b, const f32& t) { return a * (1.0f - t) + b * t; }
+internal constexpr f32 lerp(const f32& a, const f32& b, const f32& t) { return a * (1.0f - t) + b * t; }
 
-internal constexpr vf2 conjugate(vf2 v) { return {  v.x, -v.y }; }
-internal constexpr vi2 conjugate(vi2 v) { return {  v.x, -v.y }; }
-internal constexpr vf2 rotate90 (vf2 v) { return { -v.y,  v.x }; }
+internal constexpr vf2 conjugate(const vf2& v) { return {  v.x, -v.y }; }
+internal constexpr vi2 conjugate(const vi2& v) { return {  v.x, -v.y }; }
+internal constexpr vf2 rotate90 (const vf2& v) { return { -v.y,  v.x }; }
 
-internal vf2 polar(f32 angle) { return { cosf(angle), sinf(angle) }; }
+internal vf2 polar(const f32& angle) { return { cosf(angle), sinf(angle) }; }
 
-internal vf2 rotate(vf2 v, f32 angle)
+internal vf2 rotate(const vf2& v, const f32& angle)
 {
 	vf2 p = polar(angle);
 	return { v.x * p.x - v.y * p.y, v.x * p.y + v.y * p.x };
 }
 
-internal constexpr f32 dampen(f32 a, f32 b, f32 k, f32 dt) { return lerp(a, b, 1.0f - expf(-k * dt)); }
-internal constexpr vf2 dampen(vf2 a, vf2 b, f32 k, f32 dt) { return lerp(a, b, 1.0f - expf(-k * dt)); }
-internal constexpr vf3 dampen(vf3 a, vf3 b, f32 k, f32 dt) { return lerp(a, b, 1.0f - expf(-k * dt)); }
-internal constexpr vf4 dampen(vf4 a, vf4 b, f32 k, f32 dt) { return lerp(a, b, 1.0f - expf(-k * dt)); }
+internal constexpr f32 dampen(const f32& a, const f32& b, const f32& k, const f32& dt) { return lerp(a, b, 1.0f - expf(-k * dt)); }
+internal constexpr vf2 dampen(const vf2& a, const vf2& b, const f32& k, const f32& dt) { return lerp(a, b, 1.0f - expf(-k * dt)); }
+internal constexpr vf3 dampen(const vf3& a, const vf3& b, const f32& k, const f32& dt) { return lerp(a, b, 1.0f - expf(-k * dt)); }
+internal constexpr vf4 dampen(const vf4& a, const vf4& b, const f32& k, const f32& dt) { return lerp(a, b, 1.0f - expf(-k * dt)); }
 
-internal constexpr f32 dot(vf2 u, vf2 v) { return u.x * v.x + u.y * v.y;                         }
-internal constexpr f32 dot(vf3 u, vf3 v) { return u.x * v.x + u.y * v.y + u.z * v.z;             }
-internal constexpr f32 dot(vf4 u, vf4 v) { return u.x * v.x + u.y * v.y + u.z * v.z + u.w * v.w; }
+internal constexpr f32 dot(const vf2& u, const vf2& v) { return u.x * v.x + u.y * v.y;                         }
+internal constexpr f32 dot(const vf3& u, const vf3& v) { return u.x * v.x + u.y * v.y + u.z * v.z;             }
+internal constexpr f32 dot(const vf4& u, const vf4& v) { return u.x * v.x + u.y * v.y + u.z * v.z + u.w * v.w; }
 
-internal constexpr vf3 cross(vf3 u, vf3 v) { return { u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x }; }
+internal constexpr vf3 cross(const vf3& u, const vf3& v) { return { u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x }; }
 
-internal constexpr f32 norm_sq(vf2 v) { return v.x * v.x + v.y * v.y;                         }
-internal constexpr f32 norm_sq(vf3 v) { return v.x * v.x + v.y * v.y + v.z * v.z;             }
-internal constexpr f32 norm_sq(vf4 v) { return v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w; }
+internal constexpr f32 norm_sq(const vf2& v) { return v.x * v.x + v.y * v.y;                         }
+internal constexpr f32 norm_sq(const vf3& v) { return v.x * v.x + v.y * v.y + v.z * v.z;             }
+internal constexpr f32 norm_sq(const vf4& v) { return v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w; }
 
-internal f32 norm(vf2 v) { return sqrtf(norm_sq(v)); }
-internal f32 norm(vf3 v) { return sqrtf(norm_sq(v)); }
-internal f32 norm(vf4 v) { return sqrtf(norm_sq(v)); }
+internal f32 norm(const vf2& v) { return sqrtf(norm_sq(v)); }
+internal f32 norm(const vf3& v) { return sqrtf(norm_sq(v)); }
+internal f32 norm(const vf4& v) { return sqrtf(norm_sq(v)); }
 
-internal vf2 normalize(vf2 v) { return v / norm(v); }
-internal vf3 normalize(vf3 v) { return v / norm(v); }
-internal vf4 normalize(vf4 v) { return v / norm(v); }
+internal vf2 normalize(const vf2& v) { return v / norm(v); }
+internal vf3 normalize(const vf3& v) { return v / norm(v); }
+internal vf4 normalize(const vf4& v) { return v / norm(v); }
 
-internal constexpr i32 mod(i32 x, i32 m) { return (x % m + m) % m; }
-internal           f32 mod(f32 x, f32 m) { f32 y = fmodf(x, m); return y < 0.0f ? y + m : y; }
+internal constexpr i32 mod(const i32& x, const i32& m) { return (x % m + m) % m; }
+internal           f32 mod(const f32& x, const f32& m) { f32 y = fmodf(x, m); return y < 0.0f ? y + m : y; }
 
-internal f32 atan2(vf2 v) { return atan2f(v.y, v.x); }
+internal f32 atan2(const vf2& v) { return atan2f(v.y, v.x); }
 
 #include <xmmintrin.h>
 
@@ -563,24 +563,24 @@ global constexpr __m128 m_8   = {     8.0f,     8.0f,     8.0f,     8.0f };
 global constexpr __m128 m_255 = {   255.0f,   255.0f,   255.0f,   255.0f };
 global constexpr __m128 m_inf = { INFINITY, INFINITY, INFINITY, INFINITY };
 
-internal __m128 square(__m128 x                    ) { return _mm_mul_ps(x, x); }
-internal __m128 cube  (__m128 x                    ) { return _mm_mul_ps(_mm_mul_ps(x, x), x); }
-internal __m128 lerp  (__m128 a, __m128 b, __m128 t) { return _mm_add_ps(_mm_mul_ps(a, _mm_sub_ps(m_1, t)), _mm_mul_ps(b, t)); }
-internal __m128 clamp (__m128 x, __m128 a, __m128 b) { return _mm_min_ps(_mm_max_ps(x, a), b); }
+internal __m128 square(const __m128& x                                  ) { return _mm_mul_ps(x, x); }
+internal __m128 cube  (const __m128& x                                  ) { return _mm_mul_ps(_mm_mul_ps(x, x), x); }
+internal __m128 lerp  (const __m128& a, const __m128& b, const __m128& t) { return _mm_add_ps(_mm_mul_ps(a, _mm_sub_ps(m_1, t)), _mm_mul_ps(b, t)); }
+internal __m128 clamp (const __m128& x, const __m128& a, const __m128& b) { return _mm_min_ps(_mm_max_ps(x, a), b); }
 
 //
 // String.
 //
 
-#define PASS_STRING(STRING)         (STRING).size, (STRING).data
-#define STRING_FROM_LITERAL(STRLIT) (String { sizeof(STRLIT) - 1, STRLIT });
+#define PASS_STRING(STRING) (STRING).size, (STRING).data
+#define LSTR(STRLIT)        (String { sizeof(STRLIT) - 1, STRLIT })
 
-internal constexpr bool32 is_alpha(char c)
+internal constexpr bool32 is_alpha(const char& c)
 {
 	return IN_RANGE(c, 'a', 'z' + 1) || IN_RANGE(c, 'A', 'Z' + 1);
 }
 
-internal constexpr bool32 is_digit(char c)
+internal constexpr bool32 is_digit(const char& c)
 {
 	return IN_RANGE(c, '0', '9' + 1);
 }
@@ -591,6 +591,5 @@ struct String
 	char* data;
 };
 
-internal constexpr bool32 operator==(String& a, String& b) { return a.size  == b.size  && memcmp(a.data , b.data , a.size ) == 0; }
-internal constexpr bool32 operator!=(String& a, String& b) { return !(a == b); }
-
+internal constexpr bool32 operator==(const String& a, const String& b) { return a.size == b.size && memcmp(a.data, b.data, a.size) == 0; }
+internal constexpr bool32 operator!=(const String& a, const String& b) { return !(a == b); }
