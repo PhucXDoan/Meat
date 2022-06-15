@@ -68,6 +68,8 @@ typedef double      f64;
 #define FOR_IT_NODES_(NODES)                FOR_NODES_(it, (NODES))
 #define FOR_NODES(...)                      MACRO_EXPAND_(MACRO_OVERLOADED_2_(__VA_ARGS__, FOR_NODES_, FOR_IT_NODES_)(__VA_ARGS__))
 
+#define IMPLIES(P, Q)                       (!(P) || (Q))
+#define IFF(P, Q)                           (!(P) == !(Q))
 #define IN_RANGE(X, MINI, MAXI)             ((MINI) <= (X) && (X) < (MAXI))
 #define SWAP(X, Y)                          do { auto MACRO_CONCAT_(SWAP_, __LINE__) = *(X); *(X) = *(Y); *(Y) = MACRO_CONCAT_(SWAP_, __LINE__); } while (false)
 #define KIBIBYTES_OF(N)                     (1024ULL *             (N))
