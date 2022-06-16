@@ -223,6 +223,24 @@ internal DEFER_<F> operator+(DEFER_EMPTY_, F&& f)
 	return DEFER_<F>(std::forward<F>(f));
 }
 
+//
+// Misc.
+//
+
+template <typename TYPE>
+internal TYPE* pop_node(TYPE** node)
+{
+	TYPE* head = *node;
+	*node = (*node)->next_node;
+	return head;
+}
+
+template <typename TYPE>
+internal void push_single_node(TYPE* head, TYPE** node)
+{
+	head->next_node = *node;
+	*node           = head;
+}
 
 //
 // Memory.
@@ -267,6 +285,21 @@ internal MemoryArena memory_arena_reserve(MemoryArena* arena, const memsize& siz
 	reservation.used = 0;
 	arena->used += size;
 	return reservation;
+}
+
+template <typename TYPE>
+internal TYPE* memory_arena_allocate_from_available(TYPE** available, MemoryArena* arena)
+{
+	if (*available)
+	{
+		TYPE* allocation = *available;
+		*available = (*available)->next_node;
+		return allocation;
+	}
+	else
+	{
+		return memory_arena_allocate<TYPE>(arena);
+	}
 }
 
 //

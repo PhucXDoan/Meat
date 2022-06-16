@@ -5,8 +5,8 @@
 
 enum struct TokenKind : u8
 {
-	eof,
-	err,
+	eof, // @TODO@ Redundant
+	err, // @TODO@ Redundant
 	assertion,
 
 	identifier,
@@ -33,20 +33,31 @@ struct Token
 	StringView string;
 };
 
+struct TokenBufferNode
+{
+	TokenBufferNode* next_node;
+	i32              count;
+	Token            buffer[8];
+};
+
 struct Tokenizer
 {
-	i32   file_size;
-	char* file_data;
-	i32   token_count;
-	Token token_buffer[1024];
-	i32   current_token_index;
+	i32              file_size;
+	char*            file_data;
+	i32              current_token_index_in_buffer_node;
+	TokenBufferNode* head_token_buffer_node;    // @TODO@ Embedded token buffer node.
+	TokenBufferNode* current_token_buffer_node; // @TODO@ If not too restrictive, could deinitialize a buffer node before moving onto the next.
 };
 
 struct SyntaxTree
 {
-	Token       token;
-	SyntaxTree* left;
+	union
+	{
+		SyntaxTree* next_node;
+		SyntaxTree* left;
+	};
 	SyntaxTree* right;
+	Token       token;
 };
 
 struct FunctionArgumentNode
@@ -56,15 +67,23 @@ struct FunctionArgumentNode
 	f32                   value;
 };
 
+struct Allocator
+{
+	MemoryArena           arena;
+	i32                   allocated_token_buffer_node_count;
+	i32                   allocated_syntax_tree_count;
+	i32                   allocated_function_argument_node_count;
+	TokenBufferNode*      available_token_buffer_node;
+	SyntaxTree*           available_syntax_tree;
+	FunctionArgumentNode* available_function_argument_node;
+};
+
 struct Value
 {
 	f32 number;
 };
 
 typedef Value Function(FunctionArgumentNode*);
-
-#include "predefined.cpp"
-#include "meta/predefined.h"
 
 enum struct VariableDeclarationStatus : u8
 {
@@ -115,17 +134,92 @@ struct Statement
 
 struct Ledger
 {
-	MemoryArena*          arena;
-	i32                   allocated_syntax_tree_count;
-	SyntaxTree*           available_syntax_tree;
-	i32                   allocated_function_argument_node_count;
-	FunctionArgumentNode* available_function_argument_node;
-	i32                   statement_count;
-	Statement             statement_buffer[64];
+	i32       statement_count;
+	Statement statement_buffer[64];
 };
 
+#include "predefined.cpp"
+#include "meta/predefined.h"
+
+internal SyntaxTree* init_single_syntax_tree(Allocator* allocator, Token token, SyntaxTree* left, SyntaxTree* right)
+{
+	allocator->allocated_syntax_tree_count += 1;
+
+	SyntaxTree* allocation = memory_arena_allocate_from_available(&allocator->available_syntax_tree, &allocator->arena);
+	*allocation       = {};
+	allocation->token = token;
+	allocation->left  = left;
+	allocation->right = right;
+	return allocation;
+}
+
+internal void deinit_entire_syntax_tree(Allocator* allocator, SyntaxTree* tree)
+{
+	if (tree)
+	{
+		if (tree->left)
+		{
+			deinit_entire_syntax_tree(allocator, tree->left);
+		}
+		if (tree->right)
+		{
+			deinit_entire_syntax_tree(allocator, tree->right);
+		}
+
+		tree->left                       = allocator->available_syntax_tree;
+		allocator->available_syntax_tree = tree;
+
+		allocator->allocated_syntax_tree_count -= 1;
+		ASSERT(allocator->allocated_syntax_tree_count >= 0);
+
+	}
+}
+
+internal FunctionArgumentNode* init_function_argument_node(Allocator* allocator, StringView name, f32 value = 0.0f)
+{
+	allocator->allocated_function_argument_node_count += 1;
+
+	FunctionArgumentNode* allocation = memory_arena_allocate_from_available(&allocator->available_function_argument_node, &allocator->arena);
+	*allocation       = {};
+	allocation->name  = name;
+	allocation->value = value;
+	return allocation;
+}
+
+internal void deinit_entire_function_argument_node(Allocator* allocator, FunctionArgumentNode* node)
+{
+	while (node)
+	{
+		push_single_node(pop_node(&node), &allocator->available_function_argument_node);
+
+		allocator->allocated_function_argument_node_count -= 1;
+		ASSERT(allocator->allocated_function_argument_node_count >= 0);
+	}
+}
+
+internal TokenBufferNode* init_token_buffer_node(Allocator* allocator)
+{
+	allocator->allocated_token_buffer_node_count += 1;
+
+	TokenBufferNode* allocation = memory_arena_allocate_from_available(&allocator->available_token_buffer_node, &allocator->arena);
+	*allocation       = {};
+	allocation->count = 0;
+	return allocation;
+}
+
+internal void deinit_entire_token_buffer_node(Allocator* allocator, TokenBufferNode* node)
+{
+	while (node)
+	{
+		push_single_node(pop_node(&node), &allocator->available_token_buffer_node);
+
+		allocator->allocated_token_buffer_node_count -= 1;
+		ASSERT(allocator->allocated_token_buffer_node_count >= 0);
+	}
+}
+
 // @TODO@ Handle non-existing files.
-internal Tokenizer init_tokenizer_from_file(strlit file_path)
+internal Tokenizer init_tokenizer(Allocator* allocator, strlit file_path)
 {
 	FILE* file;
 	errno_t file_errno = fopen_s(&file, file_path, "rb");
@@ -140,7 +234,9 @@ internal Tokenizer init_tokenizer_from_file(strlit file_path)
 	fseek(file, 0, SEEK_SET);
 	fread(tokenizer.file_data, sizeof(char), tokenizer.file_size, file);
 
-	tokenizer.token_count = 0;
+	tokenizer.current_token_index_in_buffer_node = 0;
+	tokenizer.head_token_buffer_node             = init_token_buffer_node(allocator);
+	tokenizer.current_token_buffer_node          = tokenizer.head_token_buffer_node;
 
 	for (i32 current_index = 0;;)
 	{
@@ -171,25 +267,31 @@ internal Tokenizer init_tokenizer_from_file(strlit file_path)
 
 		if (current_index < tokenizer.file_size)
 		{
-			Token token;
-			token.string.data = tokenizer.file_data + current_index;
+			if (tokenizer.current_token_buffer_node->count == ARRAY_CAPACITY(tokenizer.current_token_buffer_node->buffer))
+			{
+				tokenizer.current_token_buffer_node->next_node = init_token_buffer_node(allocator);
+				tokenizer.current_token_buffer_node            = tokenizer.current_token_buffer_node->next_node;
+			}
+
+			Token* token       = &tokenizer.current_token_buffer_node->buffer[tokenizer.current_token_buffer_node->count];
+			token->string.data = tokenizer.file_data + current_index;
 
 			if (is_digit(tokenizer.file_data[current_index]) || tokenizer.file_data[current_index] == '.')
 			{
-				token.kind        = TokenKind::number;
-				token.string.size = 1;
+				token->kind        = TokenKind::number;
+				token->string.size = 1;
 
 				bool32 has_decimal = tokenizer.file_data[current_index] == '.';
-				while (current_index + token.string.size < tokenizer.file_size)
+				while (current_index + token->string.size < tokenizer.file_size)
 				{
-					if (!is_digit(tokenizer.file_data[current_index + token.string.size]))
+					if (!is_digit(tokenizer.file_data[current_index + token->string.size]))
 					{
-						if (tokenizer.file_data[current_index + token.string.size] == '.')
+						if (tokenizer.file_data[current_index + token->string.size] == '.')
 						{
 							if (has_decimal)
 							{
-								token.kind   = TokenKind::err;
-								token.string = STRING_VIEW_OF("There is already a decimal in the number.");
+								token->kind   = TokenKind::err;
+								token->string = STRING_VIEW_OF("There is already a decimal in the number.");
 								goto PROCESS_TOKEN;
 							}
 							else
@@ -199,17 +301,17 @@ internal Tokenizer init_tokenizer_from_file(strlit file_path)
 						}
 						else
 						{
-							if (has_decimal && token.string.size <= 1)
+							if (has_decimal && token->string.size <= 1)
 							{
-								token.kind   = TokenKind::err;
-								token.string = STRING_VIEW_OF("I'm not sure how to interpret the single decimal.");
+								token->kind   = TokenKind::err;
+								token->string = STRING_VIEW_OF("I'm not sure how to interpret the single decimal.");
 							}
 
 							goto PROCESS_TOKEN;
 						}
 					}
 
-					token.string.size += 1;
+					token->string.size += 1;
 				}
 			}
 			else
@@ -232,15 +334,15 @@ internal Tokenizer init_tokenizer_from_file(strlit file_path)
 
 				FOR_ELEMS(RESERVED)
 				{
-					token.kind        = it->kind;
-					token.string.size = 0;
+					token->kind        = it->kind;
+					token->string.size = 0;
 
-					while (current_index + token.string.size < tokenizer.file_size)
+					while (current_index + token->string.size < tokenizer.file_size)
 					{
-						if (tokenizer.file_data[current_index + token.string.size] == it->cstring[token.string.size])
+						if (tokenizer.file_data[current_index + token->string.size] == it->cstring[token->string.size])
 						{
-							token.string.size += 1;
-							if (it->cstring[token.string.size] == '\0')
+							token->string.size += 1;
+							if (it->cstring[token->string.size] == '\0')
 							{
 								goto PROCESS_TOKEN;
 							}
@@ -254,35 +356,33 @@ internal Tokenizer init_tokenizer_from_file(strlit file_path)
 
 				if (is_alpha(tokenizer.file_data[current_index]) || tokenizer.file_data[current_index] == '_')
 				{
-					token.kind        = TokenKind::identifier;
-					token.string.size = 1;
+					token->kind        = TokenKind::identifier;
+					token->string.size = 1;
 
-					while (is_alpha(tokenizer.file_data[current_index + token.string.size]) || is_digit(tokenizer.file_data[current_index + token.string.size]) || tokenizer.file_data[current_index + token.string.size] == '_')
+					while (is_alpha(tokenizer.file_data[current_index + token->string.size]) || is_digit(tokenizer.file_data[current_index + token->string.size]) || tokenizer.file_data[current_index + token->string.size] == '_')
 					{
-						token.string.size += 1;
+						token->string.size += 1;
 					}
 				}
 				else
 				{
-					token.kind   = TokenKind::err;
-					token.string = STRING_VIEW_OF("I don't recongize the token.");
+					token->kind   = TokenKind::err;
+					token->string = STRING_VIEW_OF("I don't recongize the token->");
 				}
 
 				goto PROCESS_TOKEN;
 			}
 
 			PROCESS_TOKEN:;
-			if (token.kind == TokenKind::err)
+			if (token->kind == TokenKind::err)
 			{
 				ASSERT(false);
 				break;
 			}
 			else
 			{
-				ASSERT(IN_RANGE(tokenizer.token_count, 0, ARRAY_CAPACITY(tokenizer.token_buffer)));
-				tokenizer.token_buffer[tokenizer.token_count]  = token;
-				tokenizer.token_count                         += 1;
-				current_index += token.string.size;
+				tokenizer.current_token_buffer_node->count += 1;
+				current_index                              += token->string.size;
 			}
 		}
 		else
@@ -291,109 +391,50 @@ internal Tokenizer init_tokenizer_from_file(strlit file_path)
 		}
 	}
 
+	tokenizer.current_token_buffer_node = tokenizer.head_token_buffer_node;
+
 	return tokenizer;
 }
 
-internal void deinit_tokenizer_from_file(Tokenizer tokenizer)
+internal void deinit_tokenizer(Allocator* allocator, Tokenizer tokenizer)
 {
 	free(tokenizer.file_data);
+	deinit_entire_token_buffer_node(allocator, tokenizer.head_token_buffer_node);
 }
 
-internal SyntaxTree* init_single_syntax_tree(Ledger* ledger, Token token, SyntaxTree* left, SyntaxTree* right)
+// @TODO@ Avoid copy.
+internal Token peek_token(Tokenizer tokenizer)
 {
-	ledger->allocated_syntax_tree_count += 1;
-	SyntaxTree* allocation;
-
-	if (ledger->available_syntax_tree)
+	if (tokenizer.current_token_buffer_node)
 	{
-		allocation                       = ledger->available_syntax_tree;
-		ledger->available_syntax_tree = ledger->available_syntax_tree->left;
+		ASSERT(IN_RANGE(tokenizer.current_token_index_in_buffer_node, 0, tokenizer.current_token_buffer_node->count));
+		return tokenizer.current_token_buffer_node->buffer[tokenizer.current_token_index_in_buffer_node];
 	}
 	else
 	{
-		allocation = memory_arena_allocate<SyntaxTree>(ledger->arena);
-	}
-
-	*allocation       = {};
-	allocation->token = token;
-	allocation->left  = left;
-	allocation->right = right;
-
-	return allocation;
-}
-
-internal void deinit_entire_syntax_tree(Ledger* ledger, SyntaxTree* tree)
-{
-	if (tree)
-	{
-		if (tree->left)
-		{
-			deinit_entire_syntax_tree(ledger, tree->left);
-		}
-		if (tree->right)
-		{
-			deinit_entire_syntax_tree(ledger, tree->right);
-		}
-
-		ledger->allocated_syntax_tree_count -= 1;
-		ASSERT(ledger->allocated_syntax_tree_count >= 0);
-
-		tree->left                    = ledger->available_syntax_tree;
-		ledger->available_syntax_tree = tree;
-	}
-}
-
-internal FunctionArgumentNode* init_function_argument_node(Ledger* ledger, StringView name, f32 value = 0.0f)
-{
-	ledger->allocated_function_argument_node_count += 1;
-	FunctionArgumentNode* allocation;
-
-	if (ledger->available_function_argument_node)
-	{
-		allocation                               = ledger->available_function_argument_node;
-		ledger->available_function_argument_node = ledger->available_function_argument_node->next_node;
-	}
-	else
-	{
-		allocation = memory_arena_allocate<FunctionArgumentNode>(ledger->arena);
-	}
-
-	*allocation       = {};
-	allocation->name  = name;
-	allocation->value = value;
-
-	return allocation;
-}
-
-internal void deinit_entire_function_argument_node(Ledger* ledger, FunctionArgumentNode* node)
-{
-	while (node)
-	{
-		ledger->allocated_function_argument_node_count -= 1;
-		ASSERT(ledger->allocated_function_argument_node_count >= 0);
-
-		FunctionArgumentNode* tail = node->next_node;
-		node->next_node                          = ledger->available_function_argument_node;
-		ledger->available_function_argument_node = node;
-		node                                     = tail;
+		return {};
 	}
 }
 
 internal Token eat_token(Tokenizer* tokenizer)
 {
-	if (tokenizer->current_token_index == tokenizer->token_count)
+	if (tokenizer->current_token_buffer_node)
 	{
-		return {};
+		ASSERT(IN_RANGE(tokenizer->current_token_index_in_buffer_node, 0, tokenizer->current_token_buffer_node->count));
+		Token token = tokenizer->current_token_buffer_node->buffer[tokenizer->current_token_index_in_buffer_node];
+		tokenizer->current_token_index_in_buffer_node += 1;
+		if (tokenizer->current_token_index_in_buffer_node == tokenizer->current_token_buffer_node->count)
+		{
+			ASSERT(IFF(tokenizer->current_token_buffer_node->count == ARRAY_CAPACITY(tokenizer->current_token_buffer_node->buffer), tokenizer->current_token_buffer_node->next_node));
+			tokenizer->current_token_index_in_buffer_node = 0;
+			tokenizer->current_token_buffer_node          = tokenizer->current_token_buffer_node->next_node;
+		}
+		return token;
 	}
 	else
 	{
-		return tokenizer->token_buffer[tokenizer->current_token_index++];
+		return {};
 	}
-}
-
-internal Token peek_token(Tokenizer tokenizer)
-{
-	return tokenizer.token_buffer[tokenizer.current_token_index];
 }
 
 enum struct Associativity : u8
@@ -461,7 +502,7 @@ internal bool32 try_get_token_order(TokenOrder* token_order, TokenKind kind)
 }
 
 // @NOTE@ https://eli.thegreenplace.net/2012/08/02/parsing-expressions-by-precedence-climbing
-internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 min_precedence = 0)
+internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, Allocator* allocator, i32 min_precedence = 0)
 {
 	// @TODO@ Clean up.
 	Token parenthetical_application_token;
@@ -486,28 +527,28 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 m
 		if (token.kind == TokenKind::minus)
 		{
 			eat_token(tokenizer);
-			current_tree = init_single_syntax_tree(ledger, token, 0, eat_syntax_tree(tokenizer, ledger, multiplication_order.precedence + (multiplication_order.associativity == Associativity::binary_right_associative ? 0 : 1)));
+			current_tree = init_single_syntax_tree(allocator, token, 0, eat_syntax_tree(tokenizer, ledger, allocator, multiplication_order.precedence + (multiplication_order.associativity == Associativity::binary_right_associative ? 0 : 1)));
 			ASSERT(current_tree->right);
 		}
 		else if (try_get_token_order(&token_order, token.kind) && token_order.associativity == Associativity::prefix && token_order.precedence >= min_precedence)
 		{
 			eat_token(tokenizer);
-			current_tree = init_single_syntax_tree(ledger, token, 0, eat_syntax_tree(tokenizer, ledger, token_order.precedence + 1));
+			current_tree = init_single_syntax_tree(allocator, token, 0, eat_syntax_tree(tokenizer, ledger, allocator, token_order.precedence + 1));
 			ASSERT(current_tree->right);
 		}
 		else if (token.kind == TokenKind::parenthesis_start)
 		{
 			eat_token(tokenizer);
-			current_tree = eat_syntax_tree(tokenizer, ledger, 0);
+			current_tree = eat_syntax_tree(tokenizer, ledger, allocator, 0);
 			ASSERT(current_tree);
 			token = eat_token(tokenizer);
 			ASSERT(token.kind == TokenKind::parenthesis_end);
-			current_tree = init_single_syntax_tree(ledger, parenthetical_application_token, 0, current_tree);
+			current_tree = init_single_syntax_tree(allocator, parenthetical_application_token, 0, current_tree);
 		}
 		else if (token.kind == TokenKind::number || token.kind == TokenKind::identifier)
 		{
 			eat_token(tokenizer);
-			current_tree = init_single_syntax_tree(ledger, token, 0, 0);
+			current_tree = init_single_syntax_tree(allocator, token, 0, 0);
 		}
 		else if (token.kind == TokenKind::err)
 		{
@@ -532,19 +573,19 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 m
 			{
 				case Associativity::binary_left_associative:
 				{
-					current_tree = init_single_syntax_tree(ledger, token, current_tree, eat_syntax_tree(tokenizer, ledger, token_order.precedence + 1));
+					current_tree = init_single_syntax_tree(allocator, token, current_tree, eat_syntax_tree(tokenizer, ledger, allocator, token_order.precedence + 1));
 					ASSERT(current_tree->right);
 				} break;
 
 				case Associativity::binary_right_associative:
 				{
-					current_tree = init_single_syntax_tree(ledger, token, current_tree, eat_syntax_tree(tokenizer, ledger, token_order.precedence));
+					current_tree = init_single_syntax_tree(allocator, token, current_tree, eat_syntax_tree(tokenizer, ledger, allocator, token_order.precedence));
 					ASSERT(current_tree->right);
 				} break;
 
 				case Associativity::postfix:
 				{
-					current_tree = init_single_syntax_tree(ledger, token, current_tree, 0);
+					current_tree = init_single_syntax_tree(allocator, token, current_tree, 0);
 				} break;
 
 				case Associativity::prefix:
@@ -556,10 +597,10 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 m
 		else if (token.kind == TokenKind::parenthesis_start && parenthetical_application_order.precedence >= min_precedence)
 		{
 			eat_token(tokenizer);
-			SyntaxTree* right_hand_side = eat_syntax_tree(tokenizer, ledger, 0);
+			SyntaxTree* right_hand_side = eat_syntax_tree(tokenizer, ledger, allocator, 0);
 			token = eat_token(tokenizer);
 			ASSERT(token.kind == TokenKind::parenthesis_end);
-			current_tree = init_single_syntax_tree(ledger, parenthetical_application_token, current_tree, right_hand_side);
+			current_tree = init_single_syntax_tree(allocator, parenthetical_application_token, current_tree, right_hand_side);
 		}
 		else if // @TODO@ Might be bugged?
 		(
@@ -567,7 +608,7 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, i32 m
 			|| token.kind == TokenKind::identifier && parenthetical_application_order.precedence >= min_precedence
 		)
 		{
-			current_tree = init_single_syntax_tree(ledger, multiplication_token, current_tree, eat_syntax_tree(tokenizer, ledger, multiplication_order.precedence + (multiplication_order.associativity == Associativity::binary_right_associative ? 0 : 1)));
+			current_tree = init_single_syntax_tree(allocator, multiplication_token, current_tree, eat_syntax_tree(tokenizer, ledger, allocator, multiplication_order.precedence + (multiplication_order.associativity == Associativity::binary_right_associative ? 0 : 1)));
 		}
 		else if (token.kind == TokenKind::err)
 		{
@@ -777,7 +818,7 @@ internal bool32 DEBUG_syntax_tree_eq(SyntaxTree* a, SyntaxTree* b)
 }
 #endif
 
-internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionArgumentNode* binded_args = 0)
+internal void evaluate_statement(Statement* statement, Ledger* ledger, Allocator* allocator, FunctionArgumentNode* binded_args = 0)
 {
 	lambda evaluate_expression =
 		[&](SyntaxTree* tree)
@@ -785,7 +826,7 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 			Statement exp = {};
 			exp.tree = tree;
 			exp.type = StatementType::expression;
-			evaluate_statement(&exp, ledger, binded_args);
+			evaluate_statement(&exp, ledger, allocator, binded_args);
 			ASSERT(exp.expression.is_cached);
 			return exp.expression.cached_evaluation;
 		};
@@ -794,7 +835,7 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 	{
 		case StatementType::assertion:
 		{
-			evaluate_statement(statement->assertion.corresponding_statement, ledger);
+			evaluate_statement(statement->assertion.corresponding_statement, ledger, allocator);
 			f32 expectant_value = parse_number(statement->tree->right->token.string);
 			f32 resultant_value = NAN;
 
@@ -868,7 +909,7 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 						{
 							if (it->type == StatementType::variable_declaration && it->tree->left->token.string == statement->tree->token.string)
 							{
-								evaluate_statement(it, ledger);
+								evaluate_statement(it, ledger, allocator);
 								statement->expression.cached_evaluation = it->variable_declaration.cached_evaluation;
 								statement->expression.is_cached         = true;
 								return;
@@ -941,18 +982,18 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 									if (it->name == statement->tree->left->token.string)
 									{
 										FunctionArgumentNode* arguments = 0;
-										DEFER { deinit_entire_function_argument_node(ledger, arguments); };
+										DEFER { deinit_entire_function_argument_node(allocator, arguments); };
 
 										FunctionArgumentNode** arguments_nil = &arguments;
 										for (SyntaxTree* current_parameter_tree = statement->tree->right; current_parameter_tree; current_parameter_tree = current_parameter_tree->right)
 										{
 											if (current_parameter_tree->token.kind == TokenKind::comma)
 											{
-												*arguments_nil = init_function_argument_node(ledger, {}, evaluate_expression(current_parameter_tree->left));
+												*arguments_nil = init_function_argument_node(allocator, {}, evaluate_expression(current_parameter_tree->left));
 											}
 											else
 											{
-												*arguments_nil = init_function_argument_node(ledger, {}, evaluate_expression(current_parameter_tree));
+												*arguments_nil = init_function_argument_node(allocator, {}, evaluate_expression(current_parameter_tree));
 												break;
 											}
 
@@ -970,7 +1011,7 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 									if (function->type == StatementType::function_declaration && function->tree->left->left->token.string == statement->tree->left->token.string)
 									{
 										FunctionArgumentNode* new_binded_args = 0;
-										DEFER { deinit_entire_function_argument_node(ledger, new_binded_args); };
+										DEFER { deinit_entire_function_argument_node(allocator, new_binded_args); };
 
 										FunctionArgumentNode** new_binded_args_nil    = &new_binded_args;
 										FunctionArgumentNode*  current_function_arg   = function->function_declaration.args;
@@ -979,12 +1020,12 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 										{
 											if (current_parameter_tree->token.kind == TokenKind::comma)
 											{
-												*new_binded_args_nil = init_function_argument_node(ledger, current_function_arg->name, evaluate_expression(current_parameter_tree->left));
+												*new_binded_args_nil = init_function_argument_node(allocator, current_function_arg->name, evaluate_expression(current_parameter_tree->left));
 												current_function_arg = current_function_arg->next_node;
 											}
 											else
 											{
-												*new_binded_args_nil = init_function_argument_node(ledger, current_function_arg->name, evaluate_expression(current_parameter_tree));
+												*new_binded_args_nil = init_function_argument_node(allocator, current_function_arg->name, evaluate_expression(current_parameter_tree));
 												current_function_arg = current_function_arg->next_node;
 												break;
 											}
@@ -998,7 +1039,7 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, FunctionA
 										Statement exp = {};
 										exp.tree = function->tree->right;
 										exp.type = StatementType::expression;
-										evaluate_statement(&exp, ledger, new_binded_args);
+										evaluate_statement(&exp, ledger, allocator, new_binded_args);
 										ASSERT(exp.expression.is_cached);
 										statement->expression.cached_evaluation = exp.expression.cached_evaluation;
 										statement->expression.is_cached         = true;
@@ -1068,36 +1109,38 @@ int main(void)
 	// Initialization.
 	//
 
-	Tokenizer tokenizer = init_tokenizer_from_file(DATA_DIR "meat.meat");
-	DEFER { deinit_tokenizer_from_file(tokenizer); };
-
-	MemoryArena memory_arena;
-	memory_arena.size = MEBIBYTES_OF(1);
-	memory_arena.base = reinterpret_cast<byte*>(malloc(memory_arena.size));
-	memory_arena.used = 0;
-	DEFER { free(memory_arena.base); };
-
 	Ledger ledger = {};
-	ledger.arena = &memory_arena;
+
+	Allocator allocator  = {};
+	allocator.arena.size = MEBIBYTES_OF(1);
+	allocator.arena.base = reinterpret_cast<byte*>(malloc(allocator.arena.size));
+	allocator.arena.used = 0;
 	DEFER
 	{
+		// @NOTE@ Makes sure every initialization has been deinitialized.
 		FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count)
 		{
-			deinit_entire_syntax_tree(&ledger, it->tree);
+			deinit_entire_syntax_tree(&allocator, it->tree);
 
 			if (it->type == StatementType::function_declaration)
 			{
-				deinit_entire_function_argument_node(&ledger, it->function_declaration.args);
+				deinit_entire_function_argument_node(&allocator, it->function_declaration.args);
 			}
 		}
 
-		ASSERT(ledger.allocated_syntax_tree_count == 0);
-		ASSERT(ledger.allocated_function_argument_node_count == 0);
+		ASSERT(allocator.allocated_token_buffer_node_count      == 0);
+		ASSERT(allocator.allocated_syntax_tree_count            == 0);
+		ASSERT(allocator.allocated_function_argument_node_count == 0);
+
+		free(allocator.arena.base);
 	};
 
-	////
-	//// Interpreting.
-	////
+	Tokenizer tokenizer = init_tokenizer(&allocator, DATA_DIR "meat.meat");
+	DEFER { deinit_tokenizer(&allocator, tokenizer); };
+
+	//
+	// Interpreting.
+	//
 
 	while (peek_token(tokenizer).kind != TokenKind::eof)
 	{
@@ -1106,7 +1149,7 @@ int main(void)
 		ledger.statement_count += 1;
 
 		statement = {};
-		statement.tree = eat_syntax_tree(&tokenizer, &ledger);
+		statement.tree = eat_syntax_tree(&tokenizer, &ledger, &allocator);
 		ASSERT(statement.tree);
 
 		if (statement.tree->token.kind == TokenKind::assertion)
@@ -1131,12 +1174,12 @@ int main(void)
 					if (tree->token.kind == TokenKind::comma)
 					{
 						ASSERT(tree->left->token.kind == TokenKind::identifier);
-						*args_nil = init_function_argument_node(&ledger, tree->left->token.string);
+						*args_nil = init_function_argument_node(&allocator, tree->left->token.string);
 					}
 					else
 					{
 						ASSERT(tree->token.kind == TokenKind::identifier);
-						*args_nil = init_function_argument_node(&ledger, tree->token.string);
+						*args_nil = init_function_argument_node(&allocator, tree->token.string);
 						break;
 					}
 
@@ -1169,7 +1212,7 @@ int main(void)
 
 	FOR_ELEMS(it, ledger.statement_buffer, ledger.statement_count)
 	{
-		evaluate_statement(it, &ledger);
+		evaluate_statement(it, &ledger, &allocator);
 
 		switch (it->type)
 		{
@@ -1204,10 +1247,35 @@ int main(void)
 		}
 	}
 
-	FOR_ELEMS(it, tokenizer.token_buffer, tokenizer.token_count)
+	#if 0
+	FOR_NODES(node, tokenizer.head_token_buffer_node)
 	{
-		printf("Token : `%.*s`\n", PASS_STRING_VIEW(it->string));
+		printf(":: Token buffer node\n");
+		FOR_ELEMS(it, node->buffer, node->count)
+		{
+			printf("Token : `%.*s`\n", PASS_STRING_VIEW(it->string));
+		}
 	}
+	#elif 0
+	while (true)
+	{
+		Token token = eat_token(&tokenizer);
+
+		if (token.kind == TokenKind::eof)
+		{
+			break;
+		}
+		else if (token.kind == TokenKind::err)
+		{
+			ASSERT(false);
+			break;
+		}
+		else
+		{
+			printf("Token : `%.*s`\n", PASS_STRING_VIEW(token.string));
+		}
+	}
+	#endif
 
 	DEBUG_STDOUT_HALT();
 
