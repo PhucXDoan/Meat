@@ -5,8 +5,7 @@
 
 enum struct TokenKind : u8
 {
-	eof, // @TODO@ Redundant
-	err, // @TODO@ Redundant
+	eof,
 	assertion,
 
 	identifier,
@@ -37,7 +36,7 @@ struct TokenBufferNode
 {
 	TokenBufferNode* next_node;
 	i32              count;
-	Token            buffer[8];
+	Token            buffer[64];
 };
 
 struct Tokenizer
@@ -45,7 +44,7 @@ struct Tokenizer
 	i32              file_size;
 	char*            file_data;
 	i32              current_token_index_in_buffer_node;
-	TokenBufferNode* head_token_buffer_node;    // @TODO@ Embedded token buffer node.
+	TokenBufferNode* head_token_buffer_node;
 	TokenBufferNode* current_token_buffer_node; // @TODO@ If not too restrictive, could deinitialize a buffer node before moving onto the next.
 };
 
@@ -202,8 +201,7 @@ internal TokenBufferNode* init_token_buffer_node(Allocator* allocator)
 	allocator->allocated_token_buffer_node_count += 1;
 
 	TokenBufferNode* allocation = memory_arena_allocate_from_available(&allocator->available_token_buffer_node, &allocator->arena);
-	*allocation       = {};
-	allocation->count = 0;
+	*allocation = {};
 	return allocation;
 }
 
@@ -218,43 +216,56 @@ internal void deinit_entire_token_buffer_node(Allocator* allocator, TokenBufferN
 	}
 }
 
-// @TODO@ Handle non-existing files.
-internal Tokenizer init_tokenizer(Allocator* allocator, strlit file_path)
+internal void deinit_tokenizer(Allocator* allocator, Tokenizer* tokenizer)
+{
+	free(tokenizer->file_data);
+	deinit_entire_token_buffer_node(allocator, tokenizer->head_token_buffer_node);
+}
+
+struct InitTokenizerResult
+{
+	StringView message;
+};
+
+internal bool32 init_tokenizer(InitTokenizerResult* result, Tokenizer* tokenizer, Allocator* allocator, strlit file_path)
 {
 	FILE* file;
 	errno_t file_errno = fopen_s(&file, file_path, "rb");
-	ASSERT(file_errno == 0);
 	DEFER { fclose(file); };
 
-	Tokenizer tokenizer;
+	if (file_errno)
+	{
+		result->message = STRING_VIEW_OF("File does not exist.");
+		return true;
+	}
 
 	fseek(file, 0, SEEK_END);
-	tokenizer.file_size = ftell(file);
-	tokenizer.file_data = reinterpret_cast<char*>(malloc(tokenizer.file_size));
+	tokenizer->file_size = ftell(file);
+	tokenizer->file_data = reinterpret_cast<char*>(malloc(tokenizer->file_size));
 	fseek(file, 0, SEEK_SET);
-	fread(tokenizer.file_data, sizeof(char), tokenizer.file_size, file);
+	fread(tokenizer->file_data, sizeof(char), tokenizer->file_size, file);
 
-	tokenizer.current_token_index_in_buffer_node = 0;
-	tokenizer.head_token_buffer_node             = init_token_buffer_node(allocator);
-	tokenizer.current_token_buffer_node          = tokenizer.head_token_buffer_node;
+	tokenizer->current_token_index_in_buffer_node = 0;
+	tokenizer->head_token_buffer_node             = init_token_buffer_node(allocator);
+	tokenizer->current_token_buffer_node          = tokenizer->head_token_buffer_node;
 
 	for (i32 current_index = 0;;)
 	{
-		while (current_index < tokenizer.file_size)
+		while (current_index < tokenizer->file_size)
 		{
 			if
 			(
-				tokenizer.file_data[current_index] == ' '  ||
-				tokenizer.file_data[current_index] == '\t' ||
-				tokenizer.file_data[current_index] == '\r' ||
-				tokenizer.file_data[current_index] == '\n'
+				tokenizer->file_data[current_index] == ' '  ||
+				tokenizer->file_data[current_index] == '\t' ||
+				tokenizer->file_data[current_index] == '\r' ||
+				tokenizer->file_data[current_index] == '\n'
 			)
 			{
 				current_index += 1;
 			}
-			else if (tokenizer.file_data[current_index] == '/' && current_index + 1 < tokenizer.file_size && tokenizer.file_data[current_index + 1] == '/')
+			else if (tokenizer->file_data[current_index] == '/' && current_index + 1 < tokenizer->file_size && tokenizer->file_data[current_index + 1] == '/')
 			{
-				while (current_index < tokenizer.file_size && tokenizer.file_data[current_index] != '\n')
+				while (current_index < tokenizer->file_size && tokenizer->file_data[current_index] != '\n')
 				{
 					current_index += 1;
 				}
@@ -265,34 +276,33 @@ internal Tokenizer init_tokenizer(Allocator* allocator, strlit file_path)
 			}
 		}
 
-		if (current_index < tokenizer.file_size)
+		if (current_index < tokenizer->file_size)
 		{
-			if (tokenizer.current_token_buffer_node->count == ARRAY_CAPACITY(tokenizer.current_token_buffer_node->buffer))
+			if (tokenizer->current_token_buffer_node->count == ARRAY_CAPACITY(tokenizer->current_token_buffer_node->buffer))
 			{
-				tokenizer.current_token_buffer_node->next_node = init_token_buffer_node(allocator);
-				tokenizer.current_token_buffer_node            = tokenizer.current_token_buffer_node->next_node;
+				tokenizer->current_token_buffer_node->next_node = init_token_buffer_node(allocator);
+				tokenizer->current_token_buffer_node            = tokenizer->current_token_buffer_node->next_node;
 			}
 
-			Token* token       = &tokenizer.current_token_buffer_node->buffer[tokenizer.current_token_buffer_node->count];
-			token->string.data = tokenizer.file_data + current_index;
+			Token* token       = &tokenizer->current_token_buffer_node->buffer[tokenizer->current_token_buffer_node->count];
+			token->string.data = tokenizer->file_data + current_index;
 
-			if (is_digit(tokenizer.file_data[current_index]) || tokenizer.file_data[current_index] == '.')
+			if (is_digit(tokenizer->file_data[current_index]) || tokenizer->file_data[current_index] == '.')
 			{
 				token->kind        = TokenKind::number;
 				token->string.size = 1;
 
-				bool32 has_decimal = tokenizer.file_data[current_index] == '.';
-				while (current_index + token->string.size < tokenizer.file_size)
+				bool32 has_decimal = tokenizer->file_data[current_index] == '.';
+				while (current_index + token->string.size < tokenizer->file_size)
 				{
-					if (!is_digit(tokenizer.file_data[current_index + token->string.size]))
+					if (!is_digit(tokenizer->file_data[current_index + token->string.size]))
 					{
-						if (tokenizer.file_data[current_index + token->string.size] == '.')
+						if (tokenizer->file_data[current_index + token->string.size] == '.')
 						{
 							if (has_decimal)
 							{
-								token->kind   = TokenKind::err;
-								token->string = STRING_VIEW_OF("There is already a decimal in the number.");
-								goto PROCESS_TOKEN;
+								result->message = STRING_VIEW_OF("There is already a decimal in the number.");
+								goto ABORT;
 							}
 							else
 							{
@@ -303,8 +313,8 @@ internal Tokenizer init_tokenizer(Allocator* allocator, strlit file_path)
 						{
 							if (has_decimal && token->string.size <= 1)
 							{
-								token->kind   = TokenKind::err;
-								token->string = STRING_VIEW_OF("I'm not sure how to interpret the single decimal.");
+								result->message = STRING_VIEW_OF("I'm not sure how to interpret the single decimal.");
+								goto ABORT;
 							}
 
 							goto PROCESS_TOKEN;
@@ -337,9 +347,9 @@ internal Tokenizer init_tokenizer(Allocator* allocator, strlit file_path)
 					token->kind        = it->kind;
 					token->string.size = 0;
 
-					while (current_index + token->string.size < tokenizer.file_size)
+					while (current_index + token->string.size < tokenizer->file_size)
 					{
-						if (tokenizer.file_data[current_index + token->string.size] == it->cstring[token->string.size])
+						if (tokenizer->file_data[current_index + token->string.size] == it->cstring[token->string.size])
 						{
 							token->string.size += 1;
 							if (it->cstring[token->string.size] == '\0')
@@ -354,36 +364,33 @@ internal Tokenizer init_tokenizer(Allocator* allocator, strlit file_path)
 					}
 				}
 
-				if (is_alpha(tokenizer.file_data[current_index]) || tokenizer.file_data[current_index] == '_')
+				if (is_alpha(tokenizer->file_data[current_index]) || tokenizer->file_data[current_index] == '_')
 				{
 					token->kind        = TokenKind::identifier;
 					token->string.size = 1;
 
-					while (is_alpha(tokenizer.file_data[current_index + token->string.size]) || is_digit(tokenizer.file_data[current_index + token->string.size]) || tokenizer.file_data[current_index + token->string.size] == '_')
+					while (is_alpha(tokenizer->file_data[current_index + token->string.size]) || is_digit(tokenizer->file_data[current_index + token->string.size]) || tokenizer->file_data[current_index + token->string.size] == '_')
 					{
 						token->string.size += 1;
 					}
 				}
 				else
 				{
-					token->kind   = TokenKind::err;
-					token->string = STRING_VIEW_OF("I don't recongize the token->");
+					result->message = STRING_VIEW_OF("I don't recongize the token.");
+					goto ABORT;
 				}
 
 				goto PROCESS_TOKEN;
 			}
 
 			PROCESS_TOKEN:;
-			if (token->kind == TokenKind::err)
-			{
-				ASSERT(false);
-				break;
-			}
-			else
-			{
-				tokenizer.current_token_buffer_node->count += 1;
-				current_index                              += token->string.size;
-			}
+			tokenizer->current_token_buffer_node->count += 1;
+			current_index                               += token->string.size;
+			continue;
+
+			ABORT:;
+			deinit_tokenizer(allocator, tokenizer);
+			return true;
 		}
 		else
 		{
@@ -391,24 +398,18 @@ internal Tokenizer init_tokenizer(Allocator* allocator, strlit file_path)
 		}
 	}
 
-	tokenizer.current_token_buffer_node = tokenizer.head_token_buffer_node;
+	tokenizer->current_token_buffer_node = tokenizer->head_token_buffer_node;
 
-	return tokenizer;
-}
-
-internal void deinit_tokenizer(Allocator* allocator, Tokenizer tokenizer)
-{
-	free(tokenizer.file_data);
-	deinit_entire_token_buffer_node(allocator, tokenizer.head_token_buffer_node);
+	return false;
 }
 
 // @TODO@ Avoid copy.
-internal Token peek_token(Tokenizer tokenizer)
+internal Token peek_token(Tokenizer* tokenizer)
 {
-	if (tokenizer.current_token_buffer_node)
+	if (tokenizer->current_token_buffer_node)
 	{
-		ASSERT(IN_RANGE(tokenizer.current_token_index_in_buffer_node, 0, tokenizer.current_token_buffer_node->count));
-		return tokenizer.current_token_buffer_node->buffer[tokenizer.current_token_index_in_buffer_node];
+		ASSERT(IN_RANGE(tokenizer->current_token_index_in_buffer_node, 0, tokenizer->current_token_buffer_node->count));
+		return tokenizer->current_token_buffer_node->buffer[tokenizer->current_token_index_in_buffer_node];
 	}
 	else
 	{
@@ -522,7 +523,7 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, Alloc
 	SyntaxTree* current_tree;
 
 	{
-		Token      token = peek_token(*tokenizer);
+		Token      token = peek_token(tokenizer);
 		TokenOrder token_order;
 		if (token.kind == TokenKind::minus)
 		{
@@ -550,11 +551,6 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, Alloc
 			eat_token(tokenizer);
 			current_tree = init_single_syntax_tree(allocator, token, 0, 0);
 		}
-		else if (token.kind == TokenKind::err)
-		{
-			ASSERT(false);
-			return 0;
-		}
 		else
 		{
 			return 0;
@@ -563,7 +559,7 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, Alloc
 
 	while (true)
 	{
-		Token      token = peek_token(*tokenizer);
+		Token      token = peek_token(tokenizer);
 		TokenOrder token_order;
 		if (try_get_token_order(&token_order, token.kind) && token_order.precedence >= min_precedence)
 		{
@@ -609,10 +605,6 @@ internal SyntaxTree* eat_syntax_tree(Tokenizer* tokenizer, Ledger* ledger, Alloc
 		)
 		{
 			current_tree = init_single_syntax_tree(allocator, multiplication_token, current_tree, eat_syntax_tree(tokenizer, ledger, allocator, multiplication_order.precedence + (multiplication_order.associativity == Associativity::binary_right_associative ? 0 : 1)));
-		}
-		else if (token.kind == TokenKind::err)
-		{
-			ASSERT(false);
 		}
 		else
 		{
@@ -1105,6 +1097,8 @@ internal void evaluate_statement(Statement* statement, Ledger* ledger, Allocator
 
 int main(void)
 {
+	DEFER { DEBUG_STDOUT_HALT(); };
+
 	//
 	// Initialization.
 	//
@@ -1135,14 +1129,22 @@ int main(void)
 		free(allocator.arena.base);
 	};
 
-	Tokenizer tokenizer = init_tokenizer(&allocator, DATA_DIR "meat.meat");
-	DEFER { deinit_tokenizer(&allocator, tokenizer); };
+	Tokenizer tokenizer;
+	{
+		InitTokenizerResult result;
+		if (init_tokenizer(&result, &tokenizer, &allocator, DATA_DIR "meat.meat"))
+		{
+			printf("%.*s\n", PASS_STRING_VIEW(result.message));
+			return -1;
+		}
+	}
+	DEFER { deinit_tokenizer(&allocator, &tokenizer); };
 
 	//
 	// Interpreting.
 	//
 
-	while (peek_token(tokenizer).kind != TokenKind::eof)
+	while (peek_token(&tokenizer).kind != TokenKind::eof)
 	{
 		ASSERT(IN_RANGE(ledger.statement_count, 0, ARRAY_CAPACITY(ledger.statement_buffer)));
 		aliasing statement = ledger.statement_buffer[ledger.statement_count];
@@ -1265,19 +1267,12 @@ int main(void)
 		{
 			break;
 		}
-		else if (token.kind == TokenKind::err)
-		{
-			ASSERT(false);
-			break;
-		}
 		else
 		{
 			printf("Token : `%.*s`\n", PASS_STRING_VIEW(token.string));
 		}
 	}
 	#endif
-
-	DEBUG_STDOUT_HALT();
 
 	return 0;
 }
