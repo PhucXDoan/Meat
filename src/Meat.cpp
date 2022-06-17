@@ -43,7 +43,7 @@ struct Tokenizer
 {
 	i32              file_size;
 	char*            file_data;
-	i32              current_token_index_in_buffer_node;
+	i32              index_in_current_token_buffer_node;
 	TokenBufferNode* head_token_buffer_node;
 	TokenBufferNode* current_token_buffer_node; // @TODO@ If not too restrictive, could deinitialize a buffer node before moving onto the next.
 };
@@ -222,22 +222,20 @@ internal void deinit_tokenizer(Allocator* allocator, Tokenizer* tokenizer)
 	deinit_entire_token_buffer_node(allocator, tokenizer->head_token_buffer_node);
 }
 
-struct InitTokenizerResult
+struct InitTokenizerStatus
 {
 	StringView message;
 };
 
-internal bool32 init_tokenizer(InitTokenizerResult* result, Tokenizer* tokenizer, Allocator* allocator, strlit file_path)
+internal bool32 init_tokenizer(InitTokenizerStatus* status, Tokenizer* tokenizer, Allocator* allocator, strlit file_path)
 {
 	FILE* file;
-	errno_t file_errno = fopen_s(&file, file_path, "rb");
-	DEFER { fclose(file); };
-
-	if (file_errno)
+	if (fopen_s(&file, file_path, "rb"))
 	{
-		result->message = STRING_VIEW_OF("File does not exist.");
+		status->message = string_builder_quick(&allocator->arena, "You received an error in attempting to open `%s`.", file_path);
 		return true;
 	}
+	DEFER { fclose(file); };
 
 	fseek(file, 0, SEEK_END);
 	tokenizer->file_size = ftell(file);
@@ -245,7 +243,7 @@ internal bool32 init_tokenizer(InitTokenizerResult* result, Tokenizer* tokenizer
 	fseek(file, 0, SEEK_SET);
 	fread(tokenizer->file_data, sizeof(char), tokenizer->file_size, file);
 
-	tokenizer->current_token_index_in_buffer_node = 0;
+	tokenizer->index_in_current_token_buffer_node = 0;
 	tokenizer->head_token_buffer_node             = init_token_buffer_node(allocator);
 	tokenizer->current_token_buffer_node          = tokenizer->head_token_buffer_node;
 
@@ -301,7 +299,7 @@ internal bool32 init_tokenizer(InitTokenizerResult* result, Tokenizer* tokenizer
 						{
 							if (has_decimal)
 							{
-								result->message = STRING_VIEW_OF("There is already a decimal in the number.");
+								status->message = STRING_VIEW_OF("There is already a decimal in the number.");
 								goto ABORT;
 							}
 							else
@@ -313,7 +311,7 @@ internal bool32 init_tokenizer(InitTokenizerResult* result, Tokenizer* tokenizer
 						{
 							if (has_decimal && token->string.size <= 1)
 							{
-								result->message = STRING_VIEW_OF("I'm not sure how to interpret the single decimal.");
+								status->message = STRING_VIEW_OF("I'm not sure how to interpret the single decimal.");
 								goto ABORT;
 							}
 
@@ -376,7 +374,7 @@ internal bool32 init_tokenizer(InitTokenizerResult* result, Tokenizer* tokenizer
 				}
 				else
 				{
-					result->message = STRING_VIEW_OF("I don't recongize the token.");
+					status->message = string_builder_quick(&allocator->arena, "You typed the unknown token `%c`.", tokenizer->file_data[current_index]);
 					goto ABORT;
 				}
 
@@ -408,8 +406,8 @@ internal Token peek_token(Tokenizer* tokenizer)
 {
 	if (tokenizer->current_token_buffer_node)
 	{
-		ASSERT(IN_RANGE(tokenizer->current_token_index_in_buffer_node, 0, tokenizer->current_token_buffer_node->count));
-		return tokenizer->current_token_buffer_node->buffer[tokenizer->current_token_index_in_buffer_node];
+		ASSERT(IN_RANGE(tokenizer->index_in_current_token_buffer_node, 0, tokenizer->current_token_buffer_node->count));
+		return tokenizer->current_token_buffer_node->buffer[tokenizer->index_in_current_token_buffer_node];
 	}
 	else
 	{
@@ -421,13 +419,13 @@ internal Token eat_token(Tokenizer* tokenizer)
 {
 	if (tokenizer->current_token_buffer_node)
 	{
-		ASSERT(IN_RANGE(tokenizer->current_token_index_in_buffer_node, 0, tokenizer->current_token_buffer_node->count));
-		Token token = tokenizer->current_token_buffer_node->buffer[tokenizer->current_token_index_in_buffer_node];
-		tokenizer->current_token_index_in_buffer_node += 1;
-		if (tokenizer->current_token_index_in_buffer_node == tokenizer->current_token_buffer_node->count)
+		ASSERT(IN_RANGE(tokenizer->index_in_current_token_buffer_node, 0, tokenizer->current_token_buffer_node->count));
+		Token token = tokenizer->current_token_buffer_node->buffer[tokenizer->index_in_current_token_buffer_node];
+		tokenizer->index_in_current_token_buffer_node += 1;
+		if (tokenizer->index_in_current_token_buffer_node == tokenizer->current_token_buffer_node->count)
 		{
 			ASSERT(IFF(tokenizer->current_token_buffer_node->count == ARRAY_CAPACITY(tokenizer->current_token_buffer_node->buffer), tokenizer->current_token_buffer_node->next_node));
-			tokenizer->current_token_index_in_buffer_node = 0;
+			tokenizer->index_in_current_token_buffer_node = 0;
 			tokenizer->current_token_buffer_node          = tokenizer->current_token_buffer_node->next_node;
 		}
 		return token;
@@ -1131,10 +1129,10 @@ int main(void)
 
 	Tokenizer tokenizer;
 	{
-		InitTokenizerResult result;
-		if (init_tokenizer(&result, &tokenizer, &allocator, DATA_DIR "meat.meat"))
+		InitTokenizerStatus status;
+		if (init_tokenizer(&status, &tokenizer, &allocator, DATA_DIR "meat.meat"))
 		{
-			printf("%.*s\n", PASS_STRING_VIEW(result.message));
+			printf("%.*s\n", PASS_STRING_VIEW(status.message));
 			return -1;
 		}
 	}

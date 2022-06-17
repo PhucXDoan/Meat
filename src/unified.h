@@ -242,6 +242,21 @@ internal void push_single_node(TYPE* head, TYPE** node)
 	*node           = head;
 }
 
+template <typename TYPE>
+internal void push_entire_node(TYPE* head, TYPE** node)
+{
+	if (head)
+	{
+		TYPE* last = head;
+		while (last->next_node)
+		{
+			last = last->next_node;
+		}
+		last->next_node = *node;
+		*node           = head;
+	}
+}
+
 //
 // Memory.
 //
@@ -607,8 +622,128 @@ internal __m128 clamp (const __m128& x, const __m128& a, const __m128& b) { retu
 // String.
 //
 
-#define PASS_STRING_VIEW(STRING_VIEW) (STRING_VIEW).size, (STRING_VIEW).data
-#define STRING_VIEW_OF(STRLIT)        (StringView { sizeof(STRLIT) - 1, STRLIT })
+#define PASS_STRING_VIEW(STRING) (STRING).size, (STRING).data
+#define STRING_VIEW_OF(STRLIT)   (StringView { sizeof(STRLIT) - 1, (STRLIT) })
+
+struct StringView
+{
+	i32         size;
+	const char* data;
+};
+
+struct StringBuilder_CharBufferNode
+{
+	StringBuilder_CharBufferNode* next_node;
+	i32                           count;
+	char                          buffer[256];
+};
+
+struct StringBuilder
+{
+	StringBuilder_CharBufferNode* head_char_buffer_node;
+	StringBuilder_CharBufferNode* curr_char_buffer_node;
+	i32                           size;
+};
+
+global StringBuilder_CharBufferNode* StringBuilder_available_char_buffer_node = 0; // @NOTE@ Will be malloc'ed but never freed. OS should be able to handle it.
+
+internal StringBuilder_CharBufferNode* StringBuilder_allocate_char_buffer_node(void)
+{
+	if (StringBuilder_available_char_buffer_node)
+	{
+		return pop_node(&StringBuilder_available_char_buffer_node);
+	}
+	else
+	{
+		return reinterpret_cast<StringBuilder_CharBufferNode*>(malloc(sizeof(StringBuilder_CharBufferNode)));
+	}
+}
+
+internal StringBuilder init_string_builder(void)
+{
+	StringBuilder builder;
+	builder.head_char_buffer_node            = StringBuilder_allocate_char_buffer_node();
+	builder.head_char_buffer_node->next_node = 0;
+	builder.head_char_buffer_node->count     = 0;
+	builder.curr_char_buffer_node            = builder.head_char_buffer_node;
+	builder.size                             = 0;
+	return builder;
+}
+
+internal StringView deinit_string_builder(StringBuilder* builder, MemoryArena* arena)
+{
+	char* string_data = memory_arena_allocate<char>(arena, builder->size);
+	char* write_ptr   = string_data;
+
+	FOR_NODES(builder->head_char_buffer_node)
+	{
+		ASSERT(IFF(it->count == ARRAY_CAPACITY(it->buffer), it->next_node));
+		FOR_ELEMS(c, it->buffer, it->count)
+		{
+			*write_ptr  = *c;
+			write_ptr  += 1;
+		}
+	}
+	ASSERT(write_ptr == string_data + builder->size);
+
+	push_entire_node(builder->head_char_buffer_node, &StringBuilder_available_char_buffer_node);
+
+	return { builder->size, string_data };
+}
+
+internal void string_builder_append(StringBuilder* builder, const char& c)
+{
+	if (builder->curr_char_buffer_node->count == ARRAY_CAPACITY(builder->curr_char_buffer_node->buffer))
+	{
+		builder->curr_char_buffer_node->next_node = StringBuilder_allocate_char_buffer_node();
+		builder->curr_char_buffer_node            = builder->curr_char_buffer_node->next_node;
+		builder->curr_char_buffer_node->next_node = 0;
+		builder->curr_char_buffer_node->count     = 0;
+	}
+
+	builder->curr_char_buffer_node->buffer[builder->curr_char_buffer_node->count] = c;
+	builder->curr_char_buffer_node->count += 1;
+	builder->size                         += 1;
+}
+
+internal void string_builder_append(StringBuilder* builder, const StringView& string)
+{
+	i32 offset = 0;
+	while (string.size - offset > 0)
+	{
+		if (builder->curr_char_buffer_node->count == ARRAY_CAPACITY(builder->curr_char_buffer_node->buffer))
+		{
+			builder->curr_char_buffer_node->next_node = StringBuilder_allocate_char_buffer_node();
+			builder->curr_char_buffer_node            = builder->curr_char_buffer_node->next_node;
+			builder->curr_char_buffer_node->next_node = 0;
+			builder->curr_char_buffer_node->count     = 0;
+		}
+
+		i32 write_count = min<i32>(ARRAY_CAPACITY(builder->curr_char_buffer_node->buffer) - builder->curr_char_buffer_node->count, string.size - offset);
+		memcpy(builder->curr_char_buffer_node->buffer + builder->curr_char_buffer_node->count, string.data + offset, write_count);
+		builder->size                         += write_count;
+		builder->curr_char_buffer_node->count += write_count;
+		offset                                += write_count;
+	}
+}
+
+// @TODO@ Smarter implementation...
+template <typename... ARGUMENTS>
+internal void string_builder_append(StringBuilder* builder, strlit format, ARGUMENTS... arguments)
+{
+	char buffer[1024];
+	i32  count = sprintf_s(buffer, format, arguments...);
+	ASSERT(count < ARRAY_CAPACITY(buffer));
+	string_builder_append(builder, { count, buffer });
+}
+
+template <typename... ARGUMENTS>
+internal StringView string_builder_quick(MemoryArena* arena, strlit format, ARGUMENTS... arguments)
+{
+	StringBuilder builder = init_string_builder();
+	string_builder_append(&builder, format, arguments...);
+	return deinit_string_builder(&builder, arena);
+}
 
 internal constexpr bool32 is_alpha(const char& c)
 {
@@ -620,12 +755,6 @@ internal constexpr bool32 is_digit(const char& c)
 	return IN_RANGE(c, '0', '9' + 1);
 }
 
-struct StringView
-{
-	i32         size;
-	const char* data;
-};
-
 internal constexpr bool32 operator==(const StringView& a, const StringView& b) { return a.size == b.size && memcmp(a.data, b.data, a.size) == 0; }
 internal constexpr bool32 operator!=(const StringView& a, const StringView& b) { return !(a == b); }
 
@@ -633,3 +762,4 @@ internal constexpr bool32 starts_with(const StringView& prefix, const StringView
 {
 	return string.size >= prefix.size && StringView { prefix.size, string.data } == prefix;
 }
+
