@@ -4,7 +4,7 @@ setlocal ENABLEDELAYEDEXPANSION
 set DEBUG=1
 set WARNINGS=-W4 -wd4201
 set DEBUG_WARNINGS=%WARNINGS% -wd4505 -wd4100 -wd4101
-set LIBRARIES=user32.lib d3d11.lib
+set LIBRARIES=user32.lib d3d11.lib d3dcompiler.lib
 
 IF NOT EXIST W:\build\ (
 	mkdir W:\build\

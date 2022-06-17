@@ -1,10 +1,14 @@
+// @TODO@ Unicode support.
+
 #include <windows.h>
 #include <windowsx.h>
 #include <dxgi.h>
 #include <d3d11.h>
+#include <d3dcompiler.h>
 #include "unified.h"
 
-// @TODO@ Unicode support.
+constexpr f32 SECONDS_PER_FRAME = 1.0f / 24.0f;
+constexpr vi2 SCREEN_DIMENSIONS = { 800, 600 };
 
 internal LRESULT CALLBACK window_callback(HWND window_handle, UINT message, WPARAM wparam, LPARAM lparam)
 {
@@ -44,8 +48,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int cmd_show)
 		return -1;
 	}
 
-	DWORD window_style = WS_OVERLAPPEDWINDOW;
-	RECT  window_rect  = { 0, 0, 500, 400 };
+	DWORD window_style = WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME;
+	RECT  window_rect  = { 0, 0, SCREEN_DIMENSIONS.x, SCREEN_DIMENSIONS.y };
 	if (!AdjustWindowRect(&window_rect, window_style, false))
 	{
 		ASSERT(!"Failed to calculate window size.");
@@ -72,6 +76,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int cmd_show)
 		DXGI_SWAP_CHAIN_DESC swapchain_description = {};
 		swapchain_description.BufferCount       = 1;
 		swapchain_description.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		swapchain_description.BufferDesc.Width  = SCREEN_DIMENSIONS.x;
+		swapchain_description.BufferDesc.Height = SCREEN_DIMENSIONS.y;
 		swapchain_description.BufferUsage       = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 		swapchain_description.OutputWindow      = window_handle;
 		swapchain_description.SampleDesc.Count  = 1;
@@ -92,10 +98,21 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int cmd_show)
 	}
 	DEFER
 	{
+		swapchain->SetFullscreenState(false, 0);
 		swapchain->Release();
 		device->Release();
 		device_context->Release();
 	};
+
+	// @TEMP@ Dumb way to disable Alt-Enter.
+	{
+		IDXGIFactory1 *factory = 0;
+		if (swapchain->GetParent(__uuidof(IDXGIFactory1), reinterpret_cast<LPVOID*>(&factory)) == S_OK)
+		{
+			factory->MakeWindowAssociation (window_handle, DXGI_MWA_NO_ALT_ENTER);
+			factory->Release();
+		}
+	}
 
 	//
 	// Set render target.
@@ -116,19 +133,96 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int cmd_show)
 	//
 
 	D3D11_VIEWPORT viewport = {};
-	viewport.TopLeftX = 0;
-	viewport.TopLeftY = 0;
-	viewport.Width    = 800;
-	viewport.Height   = 600;
+	viewport.TopLeftX = 0.0f;
+	viewport.TopLeftY = 0.0f;
+	viewport.Width    = static_cast<f32>(SCREEN_DIMENSIONS.x);
+	viewport.Height   = static_cast<f32>(SCREEN_DIMENSIONS.y);
 	device_context->RSSetViewports(1, &viewport);
+
+	//
+	// Shader.
+	//
+
+	ID3D10Blob* vertex_shader_blob;
+	if (D3DCompileFromFile(SRC_DIR L"shaders/triangle.shader", 0, 0, "vertex_shader", "vs_4_0", 0, 0, &vertex_shader_blob, 0))
+	{
+		ASSERT(!"Failed to compile vertex shader.");
+		return -1;
+	}
+
+	ID3D11VertexShader* vertex_shader;
+	if (device->CreateVertexShader(vertex_shader_blob->GetBufferPointer(), vertex_shader_blob->GetBufferSize(), 0, &vertex_shader))
+	{
+		ASSERT(!"Failed to create vertex shader.");
+		return -1;
+	}
+	DEFER { vertex_shader->Release(); };
+	device_context->VSSetShader(vertex_shader, 0, 0);
+
+	ID3D10Blob* pixel_shader_blob;
+	if (D3DCompileFromFile(SRC_DIR L"shaders/triangle.shader", 0, 0, "pixel_shader", "ps_4_0", 0, 0, &pixel_shader_blob, 0))
+	{
+		ASSERT(!"Failed to compile pixel shader.");
+		return -1;
+	}
+
+	ID3D11PixelShader* pixel_shader;
+	if (device->CreatePixelShader(pixel_shader_blob->GetBufferPointer(), pixel_shader_blob->GetBufferSize(), 0, &pixel_shader))
+	{
+		ASSERT(!"Failed to create pixel shader.");
+		return -1;
+	}
+	DEFER { pixel_shader->Release(); };
+	device_context->PSSetShader(pixel_shader, 0, 0);
+
+	struct Vertex
+	{
+		vf3 position;
+		vf4 rgba;
+	};
+
+	constexpr Vertex TRIANGLE_VERTICES[] =
+		{
+			{ {  0.00f,  0.5f, 0.0f }, { 1.0f, 0.0f, 0.0f, 1.0f } },
+			{ {  0.45f, -0.5f, 0.0f }, { 0.0f, 1.0f, 0.0f, 1.0f } },
+			{ { -0.45f, -0.5f, 0.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } }
+		};
+
+	ID3D11Buffer* vertex_buffer;
+	{
+		D3D11_BUFFER_DESC buffer_description = {};
+		buffer_description.Usage          = D3D11_USAGE_DYNAMIC;
+		buffer_description.ByteWidth      = sizeof(TRIANGLE_VERTICES);
+		buffer_description.BindFlags      = D3D11_BIND_VERTEX_BUFFER;
+		buffer_description.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		device->CreateBuffer(&buffer_description, 0, &vertex_buffer);
+
+		D3D11_MAPPED_SUBRESOURCE map;
+		device_context->Map(vertex_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
+		memcpy(map.pData, TRIANGLE_VERTICES, sizeof(TRIANGLE_VERTICES));
+		device_context->Unmap(vertex_buffer, 0);
+	}
+	DEFER { vertex_buffer->Release(); };
+
+	D3D11_INPUT_ELEMENT_DESC input_element_descriptions[] =
+		{
+			{ "position", 0, DXGI_FORMAT_R32G32B32_FLOAT   , 0, offsetof(Vertex, position), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "rgba"    , 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(Vertex, rgba    ), D3D11_INPUT_PER_VERTEX_DATA, 0 }
+		};
+
+	ID3D11InputLayout* input_layout;
+	if (device->CreateInputLayout(input_element_descriptions, ARRAY_CAPACITY(input_element_descriptions), vertex_shader_blob->GetBufferPointer(), vertex_shader_blob->GetBufferSize(), &input_layout))
+	{
+		ASSERT(!"Failed to create input layout.");
+		return -1;
+	}
+	DEFER { input_layout->Release(); };
 
 	//
 	// Loop.
 	//
 
 	ShowWindow(window_handle, cmd_show);
-
-	constexpr f32 SECONDS_PER_FRAME = 1.0f / 24.0f;
 
 	f32           frame_time = 0.0f;
 	LARGE_INTEGER counter_start;
@@ -175,6 +269,13 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int cmd_show)
 			while (frame_time >= SECONDS_PER_FRAME);
 
 			device_context->ClearRenderTargetView(target, bg_color);
+
+			device_context->IASetInputLayout(input_layout);
+			UINT stride = sizeof(Vertex);
+			UINT offset = 0;
+			device_context->IASetVertexBuffers(0, 1, &vertex_buffer, &stride, &offset);
+			device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			device_context->Draw(ARRAY_CAPACITY(TRIANGLE_VERTICES), 0);
 
 			swapchain->Present(0, 0);
 		}
